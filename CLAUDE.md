@@ -56,7 +56,9 @@ Batterie d'apprentissage pour un enfant de 3 ans qui ne lit pas encore. Un vieux
   - `CopyMe` : type Simon, avec les états `show`, `wait` et `pause`. Difficulté adaptative de longueur 1 à 4.
   - `Beat` : métronome avec des anneaux d'approche qui se referment sur le pad pile sur le temps. Les motifs sont dans `PATTERNS` et le niveau suivant arrive après `BEAT_GOAL` réussites.
 - **API d'effets** pour les modes : `app.demo(pad, t)`, `app.reward(pad, t)`, `app.celebrate(t)`, `app.ring(pad, t)`, `app.burst(pad)`, `app.draw_target(surf, pad, t)`, `app.draw_approach(surf, pad, frac)`, `app.play(name, volume)`.
-- **Changement de mode** : appui long sur START (`HOLD_TO_SWITCH`). Les appuis courts sont ignorés exprès, parce que l'enfant tape sur le boîtier.
+- **Changement de mode** : appui long sur START (`HOLD_TO_SWITCH`). Les appuis courts sont ignorés exprès, parce que l'enfant tape sur le boîtier. Si SELECT est tenu, START ne change pas de mode.
+- **Extinction** : SELECT + START tenus `SHUTDOWN_HOLD` s → `begin_shutdown()` (son `bye`, fondu `draw_shutdown`) → après `SHUTDOWN_FADE` s, `request_poweroff()` lance `SHUTDOWN_CMD` (`sudo -n systemctl poweroff`, autorisé par `pidrum-poweroff.sudoers`). En cas de refus : message console, le jeu reprend (aucun retour négatif).
+- **Éléments désactivés** : `pads.json` → `"disabled": [...]` → `App.disabled`. Non dessinés, sans son, exclus de `App.target_pads()` (seule source des pads demandés par les modes) et des motifs de `Beat`.
 
 ## Règles de conception (non négociables)
 
@@ -114,7 +116,6 @@ journalctl -u pidrum -f
 4. **Vrais échantillons .wav** en option, avec repli sur la synthèse si les fichiers sont absents.
 5. **Mode « chanson »** : accompagnement musical simple (comptines) sur lequel taper le beat.
 6. **Calibration de latence** : un mode parent pour mesurer et régler `JUDGE_OFFSET`.
-7. **Extinction propre** : combinaison longue SELECT + START pour `systemctl poweroff`, afin de protéger la carte SD.
 
 ## Interlocuteur
 

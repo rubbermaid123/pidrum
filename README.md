@@ -19,7 +19,9 @@ Appui **long** (1,5 s) sur START du kit pour passer au mode suivant. Une jauge a
 2. **Copie-moi** : le jeu joue un pad (ou une séquence) et l'enfant le reproduit. Le pad attendu clignote en blanc. Après 3 réussites, la séquence s'allonge (max 4). Après plusieurs erreurs, elle raccourcit. Il n'y a jamais de son d'échec.
 3. **Le beat** : métronome à 70 BPM. Un anneau blanc se referme sur le pad à frapper et le touche exactement sur le temps. Chaque bonne frappe remplit un point en haut. À 8 points, une fanfare joue et le motif suivant commence (une couleur, puis deux en alternance, etc.).
 
-Le clavier fonctionne aussi pour les tests : `1` à `5` pour les pads, espace pour la pédale, Entrée pour START et Échap pour quitter.
+**Éteindre le Pi proprement** : maintenir **SELECT + START** ensemble 3 s. La jauge en haut à droite devient bleue, puis une petite mélodie descendante joue et l'écran s'éteint comme une vieille télé. Attendre que la LED verte du Pi ne clignote plus avant de couper le courant. Cela évite de corrompre la carte SD. Nécessite la règle sudoers (voir « Démarrage automatique »). Sans elle, le jeu reprend simplement et le journal l'indique.
+
+Le clavier fonctionne aussi pour les tests : `1` à `5` pour les pads, espace pour la pédale, Entrée pour START, Tab pour SELECT et Échap pour quitter.
 
 ## Installation sur le Pi
 
@@ -75,6 +77,8 @@ Le script demande de frapper chaque élément 3 fois, puis d'appuyer sur START e
 - Si un élément n'a pas de bouton à lui (kit qui envoie couleur + modificateur), le script enregistre la **combinaison** de boutons, par exemple `"yellow": [304, 401]`. `pidrum.py` sait la lire. C'est signalé sous « ATTENTION » : vérifier en jeu libre que chaque élément joue le bon son.
 - S'il reste un conflit (même combinaison pour deux éléments), envoie-moi la sortie de `sudo evtest` pendant que tu frappes les pads.
 
+**Élément cassé** : l'ajouter à une liste `disabled` dans `pads.json`, par exemple `"disabled": ["yellow", "kick"]`, puis redémarrer le service. Il disparaît de l'écran et les jeux ne le demandent plus. Le retirer de la liste une fois réparé.
+
 La sortie liste aussi les axes analogiques qui bougent pendant les frappes. On s'en servira pour gérer la vélocité (nuances) dans une prochaine version.
 
 ## Test manuel
@@ -124,6 +128,15 @@ sudo systemctl daemon-reload
 ```
 sudo systemctl enable --now pidrum
 ```
+
+Autoriser l'extinction par SELECT + START (uniquement `systemctl poweroff`, rien d'autre) :
+
+```
+sed "s/__USER__/$USER/g" ~/pidrum/pidrum-poweroff.sudoers | sudo tee /etc/sudoers.d/pidrum-poweroff
+```
+```
+sudo chmod 440 /etc/sudoers.d/pidrum-poweroff && sudo visudo -cf /etc/sudoers.d/pidrum-poweroff
+```
 ```
 journalctl -u pidrum -f
 ```
@@ -143,4 +156,3 @@ Tout est en haut de `pidrum.py` : `BPM`, `BEAT_WINDOW` (tolérance), `BEAT_GOAL`
 - Vélocité : volume selon la force de frappe, une fois les axes connus
 - Vrais échantillons .wav à la place des sons synthétisés
 - Mode « chanson » : accompagnement musical simple sur lequel taper le beat
-- Extinction propre par appui long SELECT + START

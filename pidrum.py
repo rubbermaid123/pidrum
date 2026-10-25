@@ -19,6 +19,7 @@ import math
 import os
 import random
 import select
+import subprocess
 import sys
 import threading
 import time
@@ -47,6 +48,9 @@ BEAT_WINDOW = 0.25          # tolerance (s) autour du temps, genereuse pour 3 an
 BEAT_GOAL = 8               # bonnes frappes avant la fanfare et le niveau suivant
 JUDGE_OFFSET = 0.0          # (s) compense la latence TV si les frappes semblent en retard
 HOLD_TO_SWITCH = 1.5        # duree d'appui sur START pour changer de mode
+SHUTDOWN_HOLD = 3.0         # (s) SELECT + START maintenus ensemble pour eteindre le Pi
+SHUTDOWN_FADE = 2.0         # (s) son d'au revoir et fondu avant la commande
+SHUTDOWN_CMD = ["sudo", "-n", "/usr/bin/systemctl", "poweroff"]   # voir README (sudoers)
 DEBOUNCE = 0.08             # ignore les doubles declenchements d'un meme pad
                             # (le pad vert du kit rebondit ~60 ms apres le coup)
 KICK_IN_GAMES = False       # inclure la pedale dans Copie-moi / Le beat
@@ -68,6 +72,7 @@ RECONNECT_EVERY = 2.0       # (s) entre deux recherches du kit
 BG = (16, 16, 32)
 DARK_FILL = (34, 34, 52)
 WHITE = (255, 255, 255)
+SHUTDOWN_GAUGE = (90, 140, 255)
 
 # Disposition a l'ecran calquee sur le kit vu par l'enfant
 PADS = {
@@ -264,7 +269,7 @@ class FreePlay(Mode):
     def update(self, app, t):
         # Apres un moment sans frappe, un pad "appelle" doucement l'enfant
         if t - app.last_hit > IDLE_HINT_AFTER and t >= self.next_invite:
-            app.ring(random.choice(GAME_PADS), t, strong=False)
+            app.ring(random.choice(app.target_pads()), t, strong=False)
             self.next_invite = t + IDLE_HINT_EVERY
 
 
@@ -275,10 +280,11 @@ class CopyMe(Mode):
     def enter(self, app, t):
         self.length = 1
         self.wins = 0
+        self.app = app
         self.new_round(t + COPY_START_DELAY)
 
     def new_round(self, start_t):
-        pool = app_target_pads()
+        pool = self.app.target_pads()
         seq = []
         for _ in range(self.length):
             choices = [p for p in pool if not seq or p != seq[-1]]
@@ -349,9 +355,12 @@ class Beat(Mode):
     ]
 
     def enter(self, app, t):
-        self.patterns = list(self.PATTERNS)
+        patterns = list(self.PATTERNS)
         if KICK_IN_GAMES:
-            self.patterns[1:1] = [["kick"], ["kick", "red"]]
+            patterns[1:1] = [["kick"], ["kick", "red"]]
+        # Un motif avec un element desactive ne pourrait jamais etre reussi
+        allowed = set(app.target_pads())
+        self.patterns = [p for p in patterns if set(p) <= allowed] or [[app.target_pads()[0]]]
         self.period = 60.0 / BPM
         self.level = 0
         self.restart(t + BEAT_LEAD_IN * self.period)
@@ -410,9 +419,6 @@ class Beat(Mode):
             if -0.12 <= dt <= self.period:
                 app.draw_approach(surf, self.target(k), max(0.0, dt) / self.period)
 
-
-def app_target_pads():
-    return GAME_PADS + (["kick"] if KICK_IN_GAMES else [])
 
 
 # ---------------------------------------------------------------------------
@@ -541,7 +547,24 @@ class App:
         self.kick_flash = 0.0
         self.last_hit = now
         self.start_down_at = None
+        self.select_down_at = None
+        self.shutdown_at = None      # debut du fondu d'extinction
+        self.shutdown_sent = False
         self.banner_until = 0.0
+
+        # pads.json : mapping du kit et elements desactives (casses, a reparer)
+        kit_cfg = None
+        self.disabled = set()
+        if use_kit:
+            if os.path.exists(PADS_FILE):
+                with open(PADS_FILE) as f:
+                    kit_cfg = json.load(f)
+                self.disabled = set(kit_cfg.get("disabled", [])) & set(PADS)
+                if self.disabled:
+                    print("Elements desactives :", ", ".join(sorted(self.disabled)))
+            else:
+                print("pads.json absent : lancer map_pads.py. Clavier seulement.")
+
         self.modes = [FreePlay(), CopyMe(), Beat()]
         self.mode_idx = 0
         self.mode = self.modes[0]
@@ -550,15 +573,16 @@ class App:
         self.running = True
 
         self.inp = None
-        if use_kit:
-            if os.path.exists(PADS_FILE):
-                with open(PADS_FILE) as f:
-                    self.inp = EvdevInput(json.load(f), self.kit_event)
-                # Le thread kit doit pouvoir reprendre la main vite pendant le rendu
-                sys.setswitchinterval(0.001)
-                self.inp.start()
-            else:
-                print("pads.json absent : lancer map_pads.py. Clavier seulement.")
+        if kit_cfg is not None:
+            self.inp = EvdevInput(kit_cfg, self.kit_event)
+            # Le thread kit doit pouvoir reprendre la main vite pendant le rendu
+            sys.setswitchinterval(0.001)
+            self.inp.start()
+
+    def target_pads(self):
+        """Pads que les jeux peuvent demander (hors pedale par defaut, hors desactives)."""
+        pads = GAME_PADS + (["kick"] if KICK_IN_GAMES else [])
+        return [p for p in pads if p not in self.disabled]
 
     def reset_clock(self, t):
         # Pour les tests : repart d'un temps synthetique
@@ -657,7 +681,7 @@ class App:
         """Retourne True si l'evenement doit etre transmis a react()."""
         if name not in PADS:
             return name in ("start", "select")
-        if kind != "down":
+        if kind != "down" or name in self.disabled:
             return False
         with self.strike_lock:
             if t - self.last_down[name] < DEBOUNCE:
@@ -671,6 +695,9 @@ class App:
             self.start_down_at = t if kind == "down" else None
             return
         if name == "select":
+            self.select_down_at = t if kind == "down" else None
+            return
+        if self.shutdown_at is not None:
             return
         self.last_hit = t
         self.hit_visual(name, t)
@@ -709,10 +736,51 @@ class App:
         self.banner_until = t + 1.5
         self.play("jingle", 0.5)
 
+    # --- extinction (SELECT + START maintenus) ------------------------------
+
+    def combo_since(self):
+        if self.start_down_at is None or self.select_down_at is None:
+            return None
+        return max(self.start_down_at, self.select_down_at)
+
+    def begin_shutdown(self, t):
+        print("Extinction demandee (SELECT + START)")
+        self.shutdown_at = t
+        self.start_down_at = self.select_down_at = None
+        self.play("bye")
+
+    def request_poweroff(self):
+        try:
+            res = subprocess.run(SHUTDOWN_CMD, timeout=10,
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            ok = res.returncode == 0
+            detail = res.stdout.decode(errors="replace").strip() or "code %d" % res.returncode
+        except (OSError, subprocess.SubprocessError) as exc:
+            ok, detail = False, str(exc)
+        if ok:
+            print("Extinction en cours")
+            return True
+        # Aucun retour negatif a l'ecran : on reprend simplement le jeu
+        print("Extinction refusee (%s) : regle sudoers installee ? voir README" % detail)
+        self.shutdown_at = None
+        self.shutdown_sent = False
+        return False
+
     # --- boucle -----------------------------------------------------------
 
     def update(self, t, dt):
-        if self.start_down_at is not None and t - self.start_down_at >= HOLD_TO_SWITCH:
+        if self.shutdown_at is not None:
+            if not self.shutdown_sent and t - self.shutdown_at >= SHUTDOWN_FADE:
+                self.shutdown_sent = True
+                self.request_poweroff()
+            return
+        combo = self.combo_since()
+        if combo is not None and t - combo >= SHUTDOWN_HOLD:
+            self.begin_shutdown(t)
+            return
+        # SELECT tenu : START prepare l'extinction, pas un changement de mode
+        if (self.start_down_at is not None and self.select_down_at is None
+                and t - self.start_down_at >= HOLD_TO_SWITCH):
             self.start_down_at = None
             self.switch_mode(t)
         k = math.exp(-dt / 0.22)
@@ -787,14 +855,19 @@ class App:
                 pygame.draw.circle(surf, (200, 200, 220), (x, y), r)
             else:
                 pygame.draw.circle(surf, (80, 80, 100), (x, y), r, 2)
-        # Jauge d'appui long sur START
-        if self.start_down_at is not None:
-            p = (t - self.start_down_at) / HOLD_TO_SWITCH
-            if p > 0.1:
-                rr = int(self.h * 0.035)
-                cx, cy = int(self.w - self.h * 0.06), int(self.h * 0.11)
-                rect = pygame.Rect(cx - rr, cy - rr, 2 * rr, 2 * rr)
-                pygame.draw.arc(surf, WHITE, rect, math.pi / 2, math.pi / 2 + 2 * math.pi * min(1.0, p), 5)
+        # Jauge d'appui long : START seul (blanc) ou SELECT + START (bleu nuit)
+        combo = self.combo_since()
+        if combo is not None:
+            p, col = (t - combo) / SHUTDOWN_HOLD, SHUTDOWN_GAUGE
+        elif self.start_down_at is not None and self.select_down_at is None:
+            p, col = (t - self.start_down_at) / HOLD_TO_SWITCH, WHITE
+        else:
+            p = 0.0
+        if p > 0.1:
+            rr = int(self.h * 0.035)
+            cx, cy = int(self.w - self.h * 0.06), int(self.h * 0.11)
+            rect = pygame.Rect(cx - rr, cy - rr, 2 * rr, 2 * rr)
+            pygame.draw.arc(surf, col, rect, math.pi / 2, math.pi / 2 + 2 * math.pi * min(1.0, p), 5)
         # Banniere de changement de mode : N gros points entre les cymbales
         if t < self.banner_until:
             n = self.mode.dots
@@ -803,8 +876,19 @@ class App:
             for i in range(n):
                 pygame.draw.circle(surf, WHITE, (int(x0 + i * r * 3), int(self.h * 0.345)), r)
 
+    def draw_shutdown(self, surf, t):
+        # Fondu "televiseur qui s'eteint" : un rond blanc qui retrecit sur fond noir
+        p = min(1.0, (t - self.shutdown_at) / SHUTDOWN_FADE)
+        surf.fill(lerp(BG, (0, 0, 0), p))
+        r = int(self.h * 0.12 * (1.0 - p) ** 2)
+        if r > 0:
+            pygame.draw.circle(surf, lerp(WHITE, BG, p), (self.w // 2, self.h // 2), r)
+
     def draw(self, t):
         surf = self.screen
+        if self.shutdown_at is not None:
+            self.draw_shutdown(surf, t)
+            return
         surf.fill(lerp(BG, PADS["kick"]["color"], 0.18 * self.kick_flash))
         for e in self.effects:
             p = (t - e["t0"]) / e["dur"]
@@ -812,7 +896,8 @@ class App:
             r = int(e["r0"] + (e["r1"] - e["r0"]) * ease)
             pygame.draw.circle(surf, lerp(e["col"], BG, p), e["c"], r, e["w"])
         for pad in PADS:
-            self.draw_pad(surf, pad)
+            if pad not in self.disabled:
+                self.draw_pad(surf, pad)
         self.mode.draw(self, surf, t)
         for p in self.particles:
             fade = p["life"] / p["max"]

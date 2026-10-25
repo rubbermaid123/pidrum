@@ -319,6 +319,64 @@ class TestApp(unittest.TestCase):
         self.h.app.handle("down", "red", self.h.t + pidrum.DEBOUNCE * 2)
         self.assertEqual(calls, ["red", "red"])
 
+    def hold(self, *names, sec):
+        for n in names:
+            self.h.app.handle("down", n, self.h.t)
+        self.h.run(sec)
+        for n in names:
+            self.h.app.handle("up", n, self.h.t)
+
+    def test_select_start_hold_powers_off(self):
+        old = pidrum.SHUTDOWN_CMD
+        pidrum.SHUTDOWN_CMD = [sys.executable, "-c", "pass"]
+        try:
+            self.hold("select", "start", sec=pidrum.SHUTDOWN_HOLD + 0.1)
+            app = self.h.app
+            self.assertIsNotNone(app.shutdown_at)
+            self.assertIsInstance(app.mode, pidrum.FreePlay)   # pas de changement de mode
+            self.h.run(pidrum.SHUTDOWN_FADE + 0.1)
+            self.assertTrue(app.shutdown_sent)
+            self.assertIsNotNone(app.shutdown_at)              # reste en fondu noir
+        finally:
+            pidrum.SHUTDOWN_CMD = old
+
+    def test_refused_poweroff_resumes_game(self):
+        old = pidrum.SHUTDOWN_CMD
+        pidrum.SHUTDOWN_CMD = [sys.executable, "-c", "import sys; sys.exit(1)"]
+        try:
+            self.hold("select", "start", sec=pidrum.SHUTDOWN_HOLD + 0.1)
+            self.h.run(pidrum.SHUTDOWN_FADE + 0.1)
+            self.assertIsNone(self.h.app.shutdown_at)
+            calls = []
+            self.h.app.mode.on_hit = lambda app, pad, t: calls.append(pad)
+            self.h.hit("red")
+            self.assertEqual(calls, ["red"])
+        finally:
+            pidrum.SHUTDOWN_CMD = old
+
+    def test_short_combo_or_select_alone_does_nothing(self):
+        self.hold("select", "start", sec=pidrum.SHUTDOWN_HOLD - 0.5)
+        self.hold("select", sec=pidrum.SHUTDOWN_HOLD + 0.5)
+        self.assertIsNone(self.h.app.shutdown_at)
+        self.assertIsInstance(self.h.app.mode, pidrum.FreePlay)
+
+    def test_disabled_pads_never_requested(self):
+        app = self.h.app
+        app.disabled = {"yellow", "kick"}
+        self.assertNotIn("yellow", app.target_pads())
+        self.h.goto(pidrum.CopyMe)
+        for _ in range(50):
+            app.mode.new_round(self.h.t)
+            self.assertNotIn("yellow", app.mode.seq)
+        self.h.goto(pidrum.Beat)
+        for p in app.mode.patterns:
+            self.assertNotIn("yellow", p)
+        self.assertIn(["red"], app.mode.patterns)
+        played = []
+        app.play = lambda name, volume=1.0: played.append(name)
+        self.h.hit("yellow")
+        self.assertEqual(played, [])
+
     def test_kit_event_plays_now_reacts_later_with_hit_time(self):
         played, hits = [], []
         self.h.app.play = lambda name, volume=1.0: played.append(name)
@@ -444,6 +502,17 @@ class TestShots(unittest.TestCase):
         h.hit(b.target(3))
         h.run(0.1)
         h.shot("3_beat_reward")
+        old = pidrum.SHUTDOWN_CMD
+        pidrum.SHUTDOWN_CMD = [sys.executable, "-c", "pass"]
+        try:
+            h.app.handle("down", "select", h.t)
+            h.app.handle("down", "start", h.t)
+            h.run(pidrum.SHUTDOWN_HOLD * 0.6)
+            h.shot("4_shutdown_gauge")
+            h.run(pidrum.SHUTDOWN_HOLD * 0.4 + 0.1 + pidrum.SHUTDOWN_FADE * 0.3)
+            h.shot("4_shutdown_fade")
+        finally:
+            pidrum.SHUTDOWN_CMD = old
 
 
 if __name__ == "__main__":

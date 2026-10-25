@@ -123,6 +123,17 @@ class Synth:
             parts.append(x)
         return self.norm(np.concatenate(parts), 0.55)
 
+    def bye(self):
+        # Au revoir avant l'extinction : la fanfare a l'envers, plus douce (do-sol-mi-do)
+        parts = []
+        notes = (1046.5, 783.99, 659.25, 523.25)
+        for i, f in enumerate(notes):
+            d = 0.7 if i == len(notes) - 1 else 0.2
+            x = self.tone(f, d) + 0.2 * self.tone(2 * f, d)
+            x *= self.env(d, 0.35 if i == len(notes) - 1 else 0.12, attack=0.01)
+            parts.append(x)
+        return self.norm(np.concatenate(parts), 0.45)
+
     def sparkle(self):
         # Petit "ding" de bonne frappe
         d = 0.25
@@ -144,6 +155,7 @@ SOUND_NAMES = {
     "hihat": ("hihat", ()),
     "crash": ("crash", ()),
     "jingle": ("jingle", ()),
+    "bye": ("bye", ()),
     "sparkle": ("sparkle", ()),
     "tick": ("tick", (False,)),
     "tick_accent": ("tick", (True,)),

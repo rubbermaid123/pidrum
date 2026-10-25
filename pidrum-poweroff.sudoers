@@ -1,0 +1,3 @@
+# PiDrum : autorise uniquement l'extinction (SELECT + START maintenus sur le kit)
+# Installe dans /etc/sudoers.d/pidrum-poweroff (voir README), __USER__ remplace par sed
+__USER__ ALL=(root) NOPASSWD: /usr/bin/systemctl poweroff
