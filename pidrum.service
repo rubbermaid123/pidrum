@@ -8,8 +8,8 @@ WorkingDirectory=/home/__USER__/pidrum
 Environment=SDL_VIDEODRIVER=kmsdrm
 Environment=SDL_AUDIODRIVER=alsa
 Environment=PYTHONUNBUFFERED=1
-# Decommenter pour forcer une sortie audio (voir: aplay -L)
-#Environment=AUDIODEV=plughw:CARD=Headphones
+# Sortie audio : ne pas modifier ici, utiliser une surcharge locale (voir README)
+#   /etc/systemd/system/pidrum.service.d/audio.conf
 ExecStart=/usr/bin/python3 /home/__USER__/pidrum/pidrum.py
 SupplementaryGroups=video render input audio
 # Priorite CPU elevee : le thread kit doit reprendre la main sans attendre

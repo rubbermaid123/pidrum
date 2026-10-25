@@ -158,7 +158,7 @@ class TestEvdevThread(unittest.TestCase):
     def test_thread_reads_reconnects_and_calls_back(self):
         import threading
         import types
-        devices = []
+        devices, opened = [], []
         fake = types.ModuleType("evdev")
         fake.list_devices = lambda: ["/dev/input/event%d" % i for i in range(len(devices))]
         fake.InputDevice = lambda path: devices[int(path[-1])]
@@ -182,6 +182,7 @@ class TestEvdevThread(unittest.TestCase):
             inp.start()
             d1 = FakeDevice("Kit")
             devices.append(d1)
+            opened.append(d1)
             import time as _t
             deadline = _t.monotonic() + 3
             while inp.dev is None and _t.monotonic() < deadline:
@@ -191,6 +192,7 @@ class TestEvdevThread(unittest.TestCase):
             d1.unplug()
             d2 = FakeDevice("Kit")
             devices[0] = d2
+            opened.append(d2)
             while inp.dev is not d2 and _t.monotonic() < deadline + 3:
                 _t.sleep(0.01)
             d2.push(FakeEvent(1, 305, 0), FakeEvent(0, 0, 0),
@@ -201,6 +203,11 @@ class TestEvdevThread(unittest.TestCase):
         finally:
             pidrum.RECONNECT_EVERY = old_every
             del sys.modules["evdev"]
+            for d in opened:
+                try:
+                    d.close()
+                except OSError:
+                    pass
 
 
 class TestMapAnalyze(unittest.TestCase):

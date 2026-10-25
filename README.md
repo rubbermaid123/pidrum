@@ -29,13 +29,13 @@ Installer **Raspberry Pi OS Lite (64-bit)** avec Raspberry Pi Imager en activant
 sudo apt update
 ```
 ```
-sudo apt install -y python3-pygame python3-numpy python3-evdev evtest
+sudo apt install -y git python3-pygame python3-numpy python3-evdev evtest
 ```
 ```
 sudo usermod -aG input,video,render,audio $USER
 ```
 ```
-mkdir -p ~/pidrum
+git clone https://github.com/rubbermaid123/pidrum.git ~/pidrum
 ```
 
 Se déconnecter puis se reconnecter en SSH pour que les groupes s'appliquent, puis vérifier :
@@ -44,10 +44,16 @@ Se déconnecter puis se reconnecter en SSH pour que les groupes s'appliquent, pu
 groups
 ```
 
-Depuis ton poste, copier les fichiers :
+Si l'image installée est la version **avec bureau**, le bureau occupe l'écran et PiDrum ne peut pas l'utiliser. Démarrer en mode console (réversible avec `graphical.target`) :
 
 ```
-scp pidrum.py sounds.py map_pads.py test_pidrum.py pidrum.service <user>@<ip-du-pi>:~/pidrum/
+sudo systemctl set-default multi-user.target
+```
+
+Mises à jour ultérieures :
+
+```
+cd ~/pidrum && git pull && sudo systemctl restart pidrum
 ```
 
 Vérifier que tout fonctionne sur le Pi, sans kit ni écran (arrêter le service avant s'il tourne déjà) :
@@ -86,8 +92,21 @@ Ctrl+C pour arrêter.
 C'est le point critique pour un instrument de percussion.
 
 - Le kit est lu dans un thread dédié qui déclenche le son dès la frappe, indépendamment du rendu. L'attente de synchronisation verticale de l'écran n'ajoute donc pas de délai.
-- Lister les sorties disponibles : `aplay -L`
-- Choisir la sortie par défaut : `sudo raspi-config` → System Options → Audio
+- Lister les cartes : `aplay -l`. Sur le Pi 4 : `vc4hdmi0` (port HDMI côté alimentation), `vc4hdmi1` (port HDMI côté jack), `Headphones` (jack 3,5 mm).
+- Le périphérique ALSA par défaut vise `vc4hdmi0`. S'il n'y a rien sur ce port, le son échoue (erreur 524) et le journal affiche « Audio indisponible ». Choisir la sortie avec une surcharge systemd locale (hors dépôt) :
+
+```
+sudo mkdir -p /etc/systemd/system/pidrum.service.d
+```
+```
+printf '[Service]\nEnvironment=AUDIODEV=plughw:CARD=vc4hdmi1,DEV=0\n' | sudo tee /etc/systemd/system/pidrum.service.d/audio.conf
+```
+```
+sudo systemctl daemon-reload && sudo systemctl restart pidrum
+```
+
+  Remplacer `vc4hdmi1` par `vc4hdmi0` ou `Headphones` selon la sortie. Tester une sortie : `speaker-test -D plughw:CARD=vc4hdmi1,DEV=0 -c 2 -t sine -l 1`
+
 - **HDMI** : mettre la TV en **mode Jeu**. Sinon, son traitement interne ajoute facilement 50 à 100 ms et le décalage se sent.
 - **Jack 3,5 mm vers une petite enceinte** : c'est souvent la meilleure latence. La TV ne sert alors qu'à l'image.
 - En cas de craquements, monter `AUDIO_BUFFER` de 256 à 512 en haut de `pidrum.py`.
@@ -96,10 +115,7 @@ C'est le point critique pour un instrument de percussion.
 ## Démarrage automatique
 
 ```
-sed -i "s/__USER__/$USER/g" ~/pidrum/pidrum.service
-```
-```
-sudo cp ~/pidrum/pidrum.service /etc/systemd/system/
+sed "s/__USER__/$USER/g" ~/pidrum/pidrum.service | sudo tee /etc/systemd/system/pidrum.service
 ```
 ```
 sudo systemctl daemon-reload

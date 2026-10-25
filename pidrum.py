@@ -34,7 +34,7 @@ from sounds import build_sounds  # noqa: E402
 # ---------------------------------------------------------------------------
 
 FPS = 60
-AUDIO_RATE = 44100
+AUDIO_RATE = 48000          # frequence native HDMI et jack du Pi 4 (pas de reechantillonnage)
 AUDIO_BUFFER = 256          # echantillons ; monter a 512 si craquements
 BPM = 70                    # tempo du mode "Le beat"
 BEAT_WINDOW = 0.25          # tolerance (s) autour du temps, genereuse pour 3 ans
@@ -429,13 +429,16 @@ class App:
 
         self.sounds = {}
         try:
+            if not pygame.mixer.get_init():
+                # pygame.init() ignore l'echec du mixer : on reessaie pour avoir l'erreur
+                pygame.mixer.init(AUDIO_RATE, -16, 2, AUDIO_BUFFER)
             init = pygame.mixer.get_init()
-            if init:
-                pygame.mixer.set_num_channels(32)
-                self.sounds = build_sounds(pygame, init)
-                print("Audio : %d Hz, format %d, %d canaux" % init)
+            pygame.mixer.set_num_channels(32)
+            self.sounds = build_sounds(pygame, init)
+            print("Audio : %d Hz, format %d, %d canaux, sortie %s"
+                  % (init + (os.environ.get("AUDIODEV", "default"),)))
         except Exception as exc:
-            print("Audio indisponible :", exc)
+            print("Audio indisponible (%s) : verifier AUDIODEV, voir aplay -L" % exc)
 
         now = time.monotonic()
         # Frappes du kit : le thread "kit" joue le son puis depose ici le reste
