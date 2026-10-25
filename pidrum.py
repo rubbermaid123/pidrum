@@ -418,17 +418,20 @@ def app_target_pads():
 # Sorties audio et video
 # ---------------------------------------------------------------------------
 
-def hdmi_audio_cards(asound="/proc/asound"):
-    """Cartes ALSA HDMI dont l'ecran accepte l'audio (ELD avec au moins un format)."""
-    found = []
+def card_dirs(asound):
+    # card0, card1... (pas le fichier "cards")
     try:
         entries = sorted(os.listdir(asound))
     except OSError:
-        return found
-    for entry in entries:
-        if not entry.startswith("card"):
-            continue
-        base = os.path.join(asound, entry)
+        return []
+    return [os.path.join(asound, e) for e in entries
+            if e.startswith("card") and e[4:].isdigit()]
+
+
+def hdmi_audio_cards(asound="/proc/asound"):
+    """Cartes ALSA HDMI dont l'ecran accepte l'audio (ELD avec au moins un format)."""
+    found = []
+    for base in card_dirs(asound):
         try:
             eld_files = [f for f in os.listdir(base) if f.startswith("eld#")]
             with open(os.path.join(base, "id")) as f:
@@ -457,13 +460,14 @@ def hdmi_audio_cards(asound="/proc/asound"):
 
 def pick_audio_device(output=AUDIO_OUTPUT, asound="/proc/asound"):
     """Retourne la valeur AUDIODEV a utiliser, ou None pour le defaut ALSA."""
-    try:
-        cards = [e for e in sorted(os.listdir(asound)) if e.startswith("card")]
-        ids = []
-        for c in cards:
-            with open(os.path.join(asound, c, "id")) as f:
+    ids = []
+    for base in card_dirs(asound):
+        try:
+            with open(os.path.join(base, "id")) as f:
                 ids.append(f.read().strip())
-    except OSError:
+        except OSError:
+            continue
+    if not ids:
         return None
     jack = "Headphones" if "Headphones" in ids else None
     hdmi = hdmi_audio_cards(asound)
@@ -478,12 +482,15 @@ def pick_audio_device(output=AUDIO_OUTPUT, asound="/proc/asound"):
 
 def open_display(window):
     if window:
+        pygame.display.init()
         return pygame.display.set_mode(RENDER_SIZE)
-    # Au boot, le pilote vc4 peut ne pas etre pret quand le service demarre
+    # Au boot, le pilote vc4 peut ne pas etre pret quand le service demarre :
+    # sous kmsdrm, c'est deja display.init() qui echoue
     deadline = time.monotonic() + DISPLAY_WAIT
     warned = False
     while True:
         try:
+            pygame.display.init()
             return pygame.display.set_mode(RENDER_SIZE, pygame.FULLSCREEN | pygame.SCALED)
         except pygame.error as exc:
             if time.monotonic() > deadline:
@@ -493,7 +500,6 @@ def open_display(window):
                 warned = True
             pygame.display.quit()
             time.sleep(1.0)
-            pygame.display.init()
 
 
 # ---------------------------------------------------------------------------
@@ -503,7 +509,6 @@ def open_display(window):
 class App:
     def __init__(self, window=False, use_kit=True):
         # Pas de pygame.init() : il ouvrirait l'audio avant le choix de la sortie
-        pygame.display.init()
         self.screen = open_display(window)
         pygame.display.set_caption("PiDrum")
         pygame.mouse.set_visible(False)

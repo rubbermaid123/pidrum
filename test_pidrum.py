@@ -215,6 +215,9 @@ class TestAudioPick(unittest.TestCase):
         # cards : liste de (id, sad_count ou None si pas d'ELD)
         import tempfile
         root = tempfile.mkdtemp()
+        # Comme le vrai /proc/asound : un fichier "cards" et des liens par nom
+        with open(os.path.join(root, "cards"), "w") as f:
+            f.write("liste\n")
         for i, (card_id, sads) in enumerate(cards):
             d = os.path.join(root, "card%d" % i)
             os.makedirs(d)
