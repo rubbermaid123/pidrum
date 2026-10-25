@@ -55,6 +55,11 @@ HOLD_TO_SWITCH = 1.5        # duree d'appui sur START pour changer de mode
 SHUTDOWN_HOLD = 3.0         # (s) SELECT + START maintenus ensemble pour eteindre le Pi
 SHUTDOWN_FADE = 2.0         # (s) son d'au revoir et fondu avant la commande
 SHUTDOWN_CMD = ["sudo", "-n", "/usr/bin/systemctl", "poweroff"]   # voir README (sudoers)
+VEL_MIN = 25                # force mesuree d'un coup tres doux (rapport HID, 0-127)
+VEL_MAX = 120               # force d'un coup tres fort
+VEL_FLOOR = 0.35            # volume minimum : un coup doux reste bien audible
+VEL_GAMMA = 0.7             # < 1 : les coups moyens sonnent deja fort
+VEL_FRESH = 0.1             # (s) une force plus vieille que ca n'appartient pas au coup
 DEBOUNCE = 0.08             # ignore les doubles declenchements d'un meme pad
                             # (le pad vert du kit rebondit ~60 ms apres le coup)
 KICK_IN_GAMES = False       # inclure la pedale dans Copie-moi / Le beat
@@ -195,8 +200,12 @@ class EvdevInput:
     def __init__(self, cfg, callback):
         self.name = cfg["device_name"]
         self.decoder = KeyDecoder(cfg["keys"])
+        vel_cfg = cfg.get("velocity", {}).get("report_bytes", {})
+        self.velocity = VelocityDecoder(vel_cfg) if vel_cfg else None
         self.callback = callback
         self.dev = None
+        self.hid = None
+        self.hid_warned = False
         self.running = True
         self.thread = threading.Thread(target=self._loop, name="kit", daemon=True)
 
@@ -219,12 +228,25 @@ class EvdevInput:
             d.close()
         return None
 
+    def _open_hid(self):
+        """Rapports HID bruts du kit (force de frappe), ou None (volume plein)."""
+        if self.velocity is None:
+            return None
+        hid = HidRaw.find(self.name)
+        if hid is None and not self.hid_warned:
+            print("Force de frappe indisponible (hidraw illisible ? voir README, regle udev)")
+            self.hid_warned = True
+        elif hid is not None:
+            print("Force de frappe : %s" % hid.path)
+        return hid
+
     def _close(self):
-        try:
-            self.dev.close()
-        except Exception:
-            pass
-        self.dev = None
+        for d in (self.dev, self.hid):
+            try:
+                d.close()
+            except Exception:
+                pass
+        self.dev = self.hid = None
         self.decoder = KeyDecoder({r: sorted(c) for r, c in self.decoder.roles.items()})
 
     def _loop(self):
@@ -240,19 +262,111 @@ class EvdevInput:
                     time.sleep(RECONNECT_EVERY)
                     continue
                 warned = False
+                self.hid = self._open_hid()
             try:
-                ready, _, _ = select.select([self.dev.fd], [], [], 0.5)
+                fds = [self.dev.fd] + ([self.hid.fd] if self.hid is not None else [])
+                ready, _, _ = select.select(fds, [], [], 0.5)
                 if not ready:
+                    continue
+                # Le noyau remet le rapport brut (hidraw) AVANT les evenements evdev
+                # qui en decoulent : lire hidraw d'abord donne la force du coup
+                if self.hid is not None:
+                    try:
+                        for report in self.hid.read_reports():
+                            self.velocity.feed(report)
+                    except OSError:
+                        self.hid.close()
+                        self.hid = None
+                if self.dev.fd not in ready:
                     continue
                 for ev in self.dev.read():
                     for kind, role in self.decoder.feed(ev.type, ev.code, ev.value):
-                        self.callback(kind, role, time.monotonic())
+                        vel = self.velocity.take(role) if (self.velocity and kind == "down") else None
+                        self.callback(kind, role, time.monotonic(), vel)
             except BlockingIOError:
                 continue
             except (OSError, ValueError):
                 print("Kit deconnecte")
                 self._close()
                 time.sleep(RECONNECT_EVERY)
+
+
+class HidRaw:
+    """Lecture non bloquante de /dev/hidrawN (rapports bruts du kit)."""
+    REPORT_MAX = 64
+
+    def __init__(self, path):
+        self.path = path
+        self.fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+
+    @staticmethod
+    def find(device_name, sysfs="/sys/class/hidraw"):
+        try:
+            nodes = sorted(os.listdir(sysfs))
+        except OSError:
+            return None
+        for node in nodes:
+            try:
+                with open(os.path.join(sysfs, node, "device", "uevent")) as f:
+                    if "HID_NAME=%s\n" % device_name not in f.read():
+                        continue
+                return HidRaw(os.path.join("/dev", node))
+            except OSError:
+                continue
+        return None
+
+    def read_reports(self):
+        out = []
+        while True:
+            try:
+                data = os.read(self.fd, self.REPORT_MAX)
+            except BlockingIOError:
+                return out
+            if not data:
+                return out
+            out.append(data)
+
+    def close(self):
+        os.close(self.fd)
+
+
+class VelocityDecoder:
+    """Force de chaque pad depuis les rapports HID bruts.
+
+    report_bytes : role -> index de l'octet de pression dans le rapport
+    (GH World Tour PS3 : rouge 12, vert 13, bleu 14, orange 16 ; 0 = pas frappe).
+    """
+
+    def __init__(self, report_bytes):
+        self.index = {role: int(i) for role, i in report_bytes.items()}
+        self.prev = {}
+        self.last = {}     # role -> (force, instant) au front montant
+
+    def feed(self, report, now=None):
+        now = time.monotonic() if now is None else now
+        for role, i in self.index.items():
+            v = report[i] if i < len(report) else 0
+            # Seul le front montant compte : une pression residuelle ou parasite
+            # (diaphonie d'un pad voisin) ne doit pas gonfler le coup suivant
+            if v > 0 and self.prev.get(role, 0) == 0:
+                self.last[role] = (v, now)
+            self.prev[role] = v
+
+    def take(self, role, now=None):
+        """Force du coup qui vient d'arriver pour ce role, ou None (puis oubliee)."""
+        now = time.monotonic() if now is None else now
+        v = self.last.pop(role, None)
+        if v is None or now - v[1] > VEL_FRESH:
+            return None
+        return v[0]
+
+
+def velocity_volume(vel):
+    """Force brute (0-127) -> volume de lecture. None = inconnue = plein volume."""
+    if vel is None:
+        return 1.0
+    p = (min(max(vel, VEL_MIN), VEL_MAX) - VEL_MIN) / float(VEL_MAX - VEL_MIN)
+    return VEL_FLOOR + (1.0 - VEL_FLOOR) * p ** VEL_GAMMA
 
 
 # ---------------------------------------------------------------------------
@@ -838,8 +952,11 @@ class App:
     # Une frappe = strike() (debounce + son, tout de suite, n'importe quel
     # thread) puis react() (visuel + logique du mode, thread principal).
 
-    def strike(self, kind, name, t):
-        """Retourne True si l'evenement doit etre transmis a react()."""
+    def strike(self, kind, name, t, vel=None):
+        """Retourne True si l'evenement doit etre transmis a react().
+
+        vel : force brute du coup (rapport HID) ou None si inconnue.
+        """
         if name not in PADS:
             return name in ("start", "select")
         if kind != "down" or name in self.disabled:
@@ -848,7 +965,7 @@ class App:
             if t - self.last_down[name] < DEBOUNCE:
                 return False
             self.last_down[name] = t
-        self.play(PADS[name]["sound"])
+        self.play(PADS[name]["sound"], velocity_volume(vel))
         return True
 
     def react(self, kind, name, t):
@@ -869,9 +986,9 @@ class App:
         if self.strike(kind, name, t):
             self.react(kind, name, t)
 
-    def kit_event(self, kind, name, t):
+    def kit_event(self, kind, name, t, vel=None):
         # Appele depuis le thread kit
-        if self.strike(kind, name, t):
+        if self.strike(kind, name, t, vel):
             self.kit_queue.append((kind, name, t))
 
     def process_kit(self):

@@ -21,7 +21,7 @@ Batterie d'apprentissage pour un enfant de 3 ans qui ne lit pas encore. Un vieux
 
   Les codes déduits suivent la disposition PS3 standard (triangle, L1), cohérente avec les éléments vérifiés. `pads.json` les liste dans `unverified`. `map_pads.py` reste l'outil de référence. Ne jamais coder en dur des codes evdev dans `pidrum.py`. Un rôle peut aussi être une combinaison `[code, code]`.
 - Le kit s'appaire avec un délai après la mise sous tension : le dongle envoie des rapports « repos » (hat 0x0f, axes 0x80) tant que le kit ne transmet pas.
-- **Aucun axe ABS ne bouge pendant les frappes** : pas de vélocité exposée par `hid-generic` pour ce kit. Une vélocité éventuelle demanderait de lire `/dev/hidraw*` directement.
+- **Vélocité** : aucun axe ABS ne bouge, mais le rapport HID brut (27 octets, `/dev/hidrawN`) porte une pression 0-127 par pad : rouge octet 12, vert 13, bleu 14, orange 16 (jaune et pédale inconnus). Coups doux ≈ 28-40, forts ≈ 80-122. Diaphonie observée : un coup fort sur le bleu fait apparaître ~33 sur le vert sans bouton. Accès via `99-pidrum-hidraw.rules` (groupe `input`).
 
 ## Plateforme cible
 
@@ -52,6 +52,7 @@ Batterie d'apprentissage pour un enfant de 3 ans qui ne lit pas encore. Un vieux
 - **`PADS`** : nom → couleur, position normalisée (x, y), forme (`drum`, `cymbal` ou `bar`) et son. La disposition à l'écran reproduit le kit vu par l'enfant.
 - **`KeyDecoder`** : traduit les événements evdev bruts en `("down"|"up", role)`, trame par trame (SYN_REPORT). Gère les combinaisons : la plus spécifique gagne.
 - **`EvdevInput`** : **thread dédié** bloqué sur `select()`. Il ouvre le périphérique par nom (`device_name` de `pads.json`), se reconnecte toutes les `RECONNECT_EVERY` s et appelle `App.kit_event(kind, role, t)`.
+- **Force de frappe** : si `pads.json` a `velocity.report_bytes`, le thread kit ouvre aussi le hidraw du kit (`HidRaw.find` par nom) et fait `select()` sur les deux fd. Le noyau livre le rapport hidraw **avant** les événements evdev du même rapport : on lit hidraw d'abord, `VelocityDecoder` retient la valeur au front montant (pas de max cumulé, à cause de la diaphonie), et `take(role)` l'attache au `down` evdev si elle a moins de `VEL_FRESH`. `velocity_volume()` → volume du `play()`. Hidraw illisible → volume plein, rien d'autre ne change.
 - **Chemin d'une frappe** : `strike()` (debounce sous verrou + `play()`, appelé directement depuis le thread kit, son environ 1 ms après la frappe) puis `react()` (visuel + `mode.on_hit()`, thread principal, via `kit_queue`, avec le temps `t` de la frappe). `App.handle()` enchaîne les deux pour le clavier et les tests. **Ne jamais remettre le déclenchement du son dans la boucle de rendu** : `display.flip()` sous kmsdrm peut bloquer jusqu'au vsync (16 ms).
 - **Boucle `App.run()`** : rendu seul, cadencé à `FPS`. `sys.setswitchinterval(0.001)` pour que le thread kit récupère le GIL vite.
 - **Modes** : sous-classes de `Mode` qui implémentent `enter`, `on_hit`, `update` et `draw`, avec `dots` qui fixe le nombre de points de la bannière.
@@ -117,7 +118,7 @@ journalctl -u pidrum -f
 
 1. **Valider le mapping** sur le vrai kit (les combinaisons sont gérées, reste à confirmer ce qu'envoie le kit).
 2. **Mesurer la latence réelle** sur le Pi (thread kit vs vsync kmsdrm, `AUDIO_BUFFER` 256 sur HDMI/jack).
-3. **Vélocité** : volume (`channel.set_volume`) selon l'axe ABS associé à chaque pad, une fois les axes connus. Prévoir un champ optionnel `vel_abs` par pad dans `pads.json`.
+3. **Vélocité, suite** : relever les octets de force de la cymbale jaune et de la pédale après réparation ; faire détecter les octets par `map_pads.py` (aujourd'hui relevés à la main).
 4. **Vrais échantillons .wav** en option, avec repli sur la synthèse si les fichiers sont absents.
 5. **Chansons de l'utilisateur** : charger un fichier audio + une partition (JSON de temps/pads) en plus des comptines synthétisées.
 6. **Calibration de latence** : un mode parent pour mesurer et régler `JUDGE_OFFSET`.

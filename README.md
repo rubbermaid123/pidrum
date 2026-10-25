@@ -97,7 +97,26 @@ Le script demande de frapper chaque élément 3 fois, puis d'appuyer sur START e
 
 **Élément cassé** : l'ajouter à une liste `disabled` dans `pads.json`, par exemple `"disabled": ["yellow", "kick"]`, puis redémarrer le service. Il disparaît de l'écran et les jeux ne le demandent plus. Le retirer de la liste une fois réparé.
 
-La sortie liste aussi les axes analogiques qui bougent pendant les frappes. On s'en servira pour gérer la vélocité (nuances) dans une prochaine version.
+### Force de frappe (vélocité)
+
+Le pilote générique n'expose pas la force : elle est lue directement dans les rapports USB bruts (`/dev/hidrawN`), puis règle le volume de chaque coup. Un coup doux joue à environ 45 % du volume, un coup fort à 100 % (`VEL_*` en haut de `pidrum.py`). Sans cette lecture, tout joue à plein volume, comme avant.
+
+1. Autoriser le groupe `input` à lire les rapports bruts du kit (uniquement `12ba:0120`) :
+
+```
+sudo cp ~/pidrum/99-pidrum-hidraw.rules /etc/udev/rules.d/
+```
+```
+sudo udevadm control --reload && sudo udevadm trigger
+```
+
+2. Indiquer dans `pads.json` l'octet de force de chaque pad (relevé sur le GH World Tour PS3) :
+
+```json
+"velocity": {"report_bytes": {"red": 12, "green": 13, "blue": 14, "orange": 16}}
+```
+
+Le journal affiche alors `Force de frappe : /dev/hidraw0`.
 
 ## Test manuel
 
@@ -171,6 +190,5 @@ Tout est en haut de `pidrum.py` : `BPM`, `BEAT_WINDOW` (tolérance), `BEAT_GOAL`
 
 ## Pistes pour la suite
 
-- Vélocité : volume selon la force de frappe, une fois les axes connus
 - Vrais échantillons .wav à la place des sons synthétisés
 - Chansons : charger tes propres fichiers audio avec une partition à côté

@@ -220,7 +220,7 @@ class TestEvdevThread(unittest.TestCase):
         got = []
         cond = threading.Condition()
 
-        def cb(kind, role, t):
+        def cb(kind, role, t, vel=None):
             with cond:
                 got.append((kind, role))
                 cond.notify_all()
@@ -291,6 +291,118 @@ class TestAudioPick(unittest.TestCase):
 
     def test_no_asound_keeps_default(self):
         self.assertIsNone(pidrum.pick_audio_device("auto", os.path.join(HERE, "absent")))
+
+
+class TestVelocity(unittest.TestCase):
+    # Rapports reels du kit (GH World Tour PS3), releves le 2026-10-25
+    IDLE = bytes.fromhex("00000f808000000000000000000000000000000000000000000002")
+
+    def report(self, **bytes_at):
+        r = bytearray(self.IDLE)
+        for i, v in bytes_at.items():
+            r[int(i[1:])] = v
+        return bytes(r)
+
+    def test_rising_edge_value_taken_once(self):
+        dec = pidrum.VelocityDecoder({"red": 12, "orange": 16})
+        dec.feed(self.report(b12=117), now=10.0)
+        dec.feed(self.IDLE, now=10.04)
+        self.assertEqual(dec.take("red", now=10.001), 117)
+        self.assertIsNone(dec.take("red", now=10.002))      # deja consommee
+        self.assertIsNone(dec.take("orange", now=10.002))
+
+    def test_crosstalk_does_not_inflate_next_hit(self):
+        # Coup fort sur le bleu : le vert affiche 33 sans etre frappe
+        dec = pidrum.VelocityDecoder({"blue": 14, "green": 13})
+        dec.feed(self.report(b14=81), now=1.0)
+        dec.feed(self.report(b14=81, b13=33), now=1.01)
+        dec.feed(self.IDLE, now=1.05)
+        self.assertEqual(dec.take("blue", now=1.0), 81)
+        # Le vrai coup vert, doux, arrive 2 s plus tard
+        dec.feed(self.report(b13=28), now=3.0)
+        self.assertEqual(dec.take("green", now=3.0), 28)
+
+    def test_stale_value_ignored(self):
+        dec = pidrum.VelocityDecoder({"red": 12})
+        dec.feed(self.report(b12=90), now=5.0)
+        self.assertIsNone(dec.take("red", now=5.0 + pidrum.VEL_FRESH + 0.05))
+
+    def test_volume_curve(self):
+        self.assertEqual(pidrum.velocity_volume(None), 1.0)
+        soft, hard = pidrum.velocity_volume(30), pidrum.velocity_volume(118)
+        self.assertGreaterEqual(soft, pidrum.VEL_FLOOR)
+        self.assertGreater(hard, 0.95)
+        self.assertGreater(hard - soft, 0.35)
+        self.assertEqual(pidrum.velocity_volume(0), pidrum.VEL_FLOOR)
+        self.assertEqual(pidrum.velocity_volume(250), 1.0)
+
+    def test_strike_uses_velocity_volume(self):
+        os.environ["SDL_VIDEODRIVER"] = "dummy"
+        app = pidrum.App(window=True, use_kit=False)
+        try:
+            vols = []
+            app.play = lambda name, volume=1.0: vols.append(volume)
+            app.kit_event("down", "red", 100.0, 30)
+            app.kit_event("down", "blue", 100.0, 118)
+            app.kit_event("down", "green", 100.0, None)
+            self.assertLess(vols[0], 0.6)
+            self.assertGreater(vols[1], 0.95)
+            self.assertEqual(vols[2], 1.0)
+        finally:
+            pygame.quit()
+
+
+class FakeHid(FakeDevice):
+    """Faux /dev/hidrawN : rapports bruts."""
+    path = "/dev/hidraw-faux"
+
+    def read_reports(self):
+        try:
+            self.rx.recv(4096)
+        except BlockingIOError:
+            return []
+        out, self.pending = self.pending, []
+        return out
+
+
+class TestEvdevVelocityThread(unittest.TestCase):
+    def test_thread_attaches_raw_velocity_to_hit(self):
+        import threading
+        import types
+        dev, hid = FakeDevice("Kit"), FakeHid("Kit")
+        fake = types.ModuleType("evdev")
+        fake.list_devices = lambda: ["/dev/input/event0"]
+        fake.InputDevice = lambda path: dev
+        sys.modules["evdev"] = fake
+        got, cond = [], threading.Condition()
+
+        def cb(kind, role, t, vel=None):
+            with cond:
+                got.append((kind, role, vel))
+                cond.notify_all()
+        try:
+            cfg = {"device_name": "Kit", "keys": {"red": 306},
+                   "velocity": {"report_bytes": {"red": 12}}}
+            inp = pidrum.EvdevInput(cfg, cb)
+            inp._open_hid = lambda: hid
+            inp.start()
+            import time as _t
+            deadline = _t.monotonic() + 3
+            while inp.hid is None and _t.monotonic() < deadline:
+                _t.sleep(0.01)
+            # Comme le noyau : rapport brut d'abord, puis evenements evdev
+            report = bytearray(TestVelocity.IDLE)
+            report[0], report[12] = 0x04, 0x75      # bouton rouge, force 117
+            hid.push(bytes(report))
+            dev.push(FakeEvent(1, 306, 1), FakeEvent(0, 0, 0))
+            with cond:
+                self.assertTrue(cond.wait_for(lambda: got, timeout=3))
+            self.assertEqual(got[0], ("down", "red", 0x75))
+            inp.stop()
+        finally:
+            del sys.modules["evdev"]
+            dev.close()
+            hid.close()
 
 
 class TestMapAnalyze(unittest.TestCase):
