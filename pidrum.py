@@ -32,6 +32,7 @@ os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 import pygame  # noqa: E402
 
 import songs  # noqa: E402
+import sounds  # noqa: E402
 from sounds import build_sounds  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -55,10 +56,11 @@ HOLD_TO_SWITCH = 1.5        # duree d'appui sur START pour changer de mode
 SHUTDOWN_HOLD = 3.0         # (s) SELECT + START maintenus ensemble pour eteindre le Pi
 SHUTDOWN_FADE = 2.0         # (s) son d'au revoir et fondu avant la commande
 SHUTDOWN_CMD = ["sudo", "-n", "/usr/bin/systemctl", "poweroff"]   # voir README (sudoers)
-VEL_MIN = 25                # force mesuree d'un coup tres doux (rapport HID, 0-127)
-VEL_MAX = 120               # force d'un coup tres fort
-VEL_FLOOR = 0.35            # volume minimum : un coup doux reste bien audible
-VEL_GAMMA = 0.7             # < 1 : les coups moyens sonnent deja fort
+VEL_MIN = 35                # force d'un coup doux (rapport HID, 0-127 ; mesure 28-40)
+VEL_MAX = 110               # force d'un coup fort (mesure 80-122)
+VEL_SOFT_GAIN = 0.9         # niveau d'un coup tres doux (1.0 = son normal)
+VEL_HARD_GAIN = 1.5         # niveau d'un coup tres fort (> 1 : variante "_loud" saturee)
+VEL_GAMMA = 1.0             # courbe : 1 = lineaire, < 1 = coups moyens deja forts
 VEL_FRESH = 0.1             # (s) une force plus vieille que ca n'appartient pas au coup
 DEBOUNCE = 0.08             # ignore les doubles declenchements d'un meme pad
                             # (le pad vert du kit rebondit ~60 ms apres le coup)
@@ -361,12 +363,12 @@ class VelocityDecoder:
         return v[0]
 
 
-def velocity_volume(vel):
-    """Force brute (0-127) -> volume de lecture. None = inconnue = plein volume."""
+def velocity_gain(vel):
+    """Force brute (0-127) -> niveau relatif au son normal. None = inconnue = 1.0."""
     if vel is None:
         return 1.0
     p = (min(max(vel, VEL_MIN), VEL_MAX) - VEL_MIN) / float(VEL_MAX - VEL_MIN)
-    return VEL_FLOOR + (1.0 - VEL_FLOOR) * p ** VEL_GAMMA
+    return VEL_SOFT_GAIN + (VEL_HARD_GAIN - VEL_SOFT_GAIN) * p ** VEL_GAMMA
 
 
 # ---------------------------------------------------------------------------
@@ -800,7 +802,7 @@ class App:
             pygame.mixer.init(AUDIO_RATE, -16, 2, AUDIO_BUFFER)
             init = pygame.mixer.get_init()
             pygame.mixer.set_num_channels(32)
-            self.sounds = build_sounds(pygame, init)
+            self.sounds = build_sounds(pygame, init, loud_gain=VEL_HARD_GAIN)
             t_songs = time.monotonic()
             self.sounds.update(songs.build_song_sounds(pygame, init))
             print("Chansons synthetisees en %.1f s" % (time.monotonic() - t_songs))
@@ -965,8 +967,18 @@ class App:
             if t - self.last_down[name] < DEBOUNCE:
                 return False
             self.last_down[name] = t
-        self.play(PADS[name]["sound"], velocity_volume(vel))
+        self.play_pad(name, velocity_gain(vel))
         return True
+
+    def play_pad(self, pad, gain):
+        # Au-dela du son normal (gain > 1), le volume d'un canal plafonne a 1.0 :
+        # on passe a la variante "_loud" pre-saturee, jouee au volume qui donne ce gain
+        name = PADS[pad]["sound"]
+        loud = sounds.LOUD_ACHIEVED.get(name)
+        if gain > 1.0 and loud and (name + "_loud") in self.sounds:
+            self.play(name + "_loud", min(1.0, gain / loud))
+        else:
+            self.play(name, min(1.0, gain))
 
     def react(self, kind, name, t):
         if name == "start":

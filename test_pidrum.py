@@ -327,27 +327,38 @@ class TestVelocity(unittest.TestCase):
         dec.feed(self.report(b12=90), now=5.0)
         self.assertIsNone(dec.take("red", now=5.0 + pidrum.VEL_FRESH + 0.05))
 
-    def test_volume_curve(self):
-        self.assertEqual(pidrum.velocity_volume(None), 1.0)
-        soft, hard = pidrum.velocity_volume(30), pidrum.velocity_volume(118)
-        self.assertGreaterEqual(soft, pidrum.VEL_FLOOR)
-        self.assertGreater(hard, 0.95)
-        self.assertGreater(hard - soft, 0.35)
-        self.assertEqual(pidrum.velocity_volume(0), pidrum.VEL_FLOOR)
-        self.assertEqual(pidrum.velocity_volume(250), 1.0)
+    def test_gain_curve(self):
+        self.assertEqual(pidrum.velocity_gain(None), 1.0)
+        self.assertAlmostEqual(pidrum.velocity_gain(0), pidrum.VEL_SOFT_GAIN)
+        self.assertAlmostEqual(pidrum.velocity_gain(250), pidrum.VEL_HARD_GAIN)
+        # Coups reels du kit : doux 28-40, forts 80-122
+        for soft in (28, 31, 36, 40):
+            self.assertLessEqual(pidrum.velocity_gain(soft), 0.95)
+        for hard in (99, 117, 122):
+            self.assertGreaterEqual(pidrum.velocity_gain(hard), 1.4)
 
-    def test_strike_uses_velocity_volume(self):
+    def test_loud_variants_reach_gain_without_clipping(self):
+        s = sounds.Synth(44100)
+        for name in sounds.DRUM_SOUNDS:
+            x = getattr(s, name)()
+            y, got = sounds.make_loud(x, 1.5, 44100)
+            self.assertAlmostEqual(got, 1.5, delta=0.02, msg=name)
+            self.assertLessEqual(float(np.max(np.abs(y))), 0.99, name)
+            ratio = sounds.loudness(y, 44100) / sounds.loudness(x, 44100)
+            self.assertAlmostEqual(ratio, got, places=3)
+
+    def test_strike_uses_velocity_gain(self):
         os.environ["SDL_VIDEODRIVER"] = "dummy"
         app = pidrum.App(window=True, use_kit=False)
         try:
-            vols = []
-            app.play = lambda name, volume=1.0: vols.append(volume)
-            app.kit_event("down", "red", 100.0, 30)
-            app.kit_event("down", "blue", 100.0, 118)
-            app.kit_event("down", "green", 100.0, None)
-            self.assertLess(vols[0], 0.6)
-            self.assertGreater(vols[1], 0.95)
-            self.assertEqual(vols[2], 1.0)
+            calls = []
+            app.play = lambda name, volume=1.0: calls.append((name, round(volume, 2)))
+            app.kit_event("down", "red", 100.0, 25)      # tres doux : 90 % du son normal
+            app.kit_event("down", "blue", 100.0, 125)    # tres fort : variante forte a fond
+            app.kit_event("down", "green", 100.0, None)  # force inconnue : son normal
+            self.assertEqual(calls[0], ("snare", 0.9))
+            self.assertEqual(calls[1], ("tom_hi_loud", 1.0))
+            self.assertEqual(calls[2], ("tom_lo", 1.0))
         finally:
             pygame.quit()
 

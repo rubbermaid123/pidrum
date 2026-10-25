@@ -193,12 +193,61 @@ def to_mixer_array(x, fmt, channels):
     return np.ascontiguousarray(np.column_stack([a] * channels))
 
 
-def build_sounds(pygame, mixer_init):
-    """Retourne un dict nom -> pygame.mixer.Sound. mixer_init = pygame.mixer.get_init()."""
+DRUM_SOUNDS = ("kick", "snare", "tom_hi", "tom_lo", "hihat", "crash")
+LOUD_ACHIEVED = {}      # nom -> gain reellement obtenu par la variante "_loud"
+
+
+def loudness(x, sr):
+    # Niveau percu d'une percussion : RMS des 100 premieres ms
+    head = x[: int(0.1 * sr)]
+    return float(np.sqrt(np.mean(head ** 2)))
+
+
+def make_loud(x, gain, sr, max_drive=8.0):
+    """Variante plus forte (coup appuye) sans depasser 0 dB : saturation tanh minimale.
+
+    Retourne (signal, gain obtenu). Le pic reste a 0.98 : c'est le niveau
+    moyen qui monte, comme une peau frappee plus fort qui sonne plus dur.
+    """
+    peak = float(np.max(np.abs(x)))
+    if peak <= 0:
+        return x, 1.0
+    if peak * gain <= 0.98:
+        # Assez de marge (cymbales) : simple gain, timbre intact
+        return x * gain, gain
+    base = loudness(x, sr)
+
+    def drive(d):
+        y = np.tanh(d * x / peak)
+        return y / np.max(np.abs(y)) * 0.98
+
+    lo, hi = 1e-3, max_drive
+    if loudness(drive(hi), sr) < gain * base:
+        y = drive(hi)
+        return y, loudness(y, sr) / base
+    for _ in range(30):
+        mid = (lo + hi) / 2
+        if loudness(drive(mid), sr) < gain * base:
+            lo = mid
+        else:
+            hi = mid
+    y = drive(hi)
+    return y, loudness(y, sr) / base
+
+
+def build_sounds(pygame, mixer_init, loud_gain=1.5):
+    """Retourne un dict nom -> pygame.mixer.Sound. mixer_init = pygame.mixer.get_init().
+
+    Chaque son de batterie a aussi une variante "<nom>_loud", loud_gain fois
+    plus forte (gain reellement obtenu dans LOUD_ACHIEVED).
+    """
     sr, fmt, channels = mixer_init
     s = Synth(sr)
     out = {}
     for name, (method, args) in SOUND_NAMES.items():
         x = Synth.fade_out(getattr(s, method)(*args), sr)
         out[name] = pygame.sndarray.make_sound(to_mixer_array(x, fmt, channels))
+        if name in DRUM_SOUNDS:
+            loud, LOUD_ACHIEVED[name] = make_loud(x, loud_gain, sr)
+            out[name + "_loud"] = pygame.sndarray.make_sound(to_mixer_array(loud, fmt, channels))
     return out

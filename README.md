@@ -99,7 +99,7 @@ Le script demande de frapper chaque élément 3 fois, puis d'appuyer sur START e
 
 ### Force de frappe (vélocité)
 
-Le pilote générique n'expose pas la force : elle est lue directement dans les rapports USB bruts (`/dev/hidrawN`), puis règle le volume de chaque coup. Un coup doux joue à environ 45 % du volume, un coup fort à 100 % (`VEL_*` en haut de `pidrum.py`). Sans cette lecture, tout joue à plein volume, comme avant.
+Le pilote générique n'expose pas la force : elle est lue directement dans les rapports USB bruts (`/dev/hidrawN`), puis règle le volume de chaque coup. Un coup doux joue à 90 % du son normal, un coup fort à 150 % : une variante plus puissante de chaque son, pré-calculée sans écrêter (`VEL_*` en haut de `pidrum.py`). Sans cette lecture, tout joue à plein volume, comme avant.
 
 1. Autoriser le groupe `input` à lire les rapports bruts du kit (uniquement `12ba:0120`) :
 
