@@ -6,6 +6,9 @@
 
 import numpy as np
 
+SNARE_LP_TAPS = 5       # passe-bas des fils de caisse claire (plus grand = plus sourd)
+SNARE_WIRES = 1.0       # part des fils face au corps de la peau (~60 % corps / 37 % > 2 kHz)
+
 
 class Synth:
     def __init__(self, sr=44100, seed=7):
@@ -83,10 +86,17 @@ class Synth:
         return self.norm(body + click, 1.0)
 
     def snare(self):
-        d = 0.3
-        body = self.sweep(240, 180, d, 0.03) * self.env(d, 0.06) * 0.7
-        rattle = self.hp(self.noise(d)) * self.env(d, 0.09)
-        return self.norm(body + rattle, 0.9)
+        # Caisse claire : corps (2 modes de la peau), claquement, timbre en bande 1-8 kHz.
+        # Le bruit blanc filtre seulement en passe-haut sonnait comme la charleston.
+        d = 0.35
+        body = (self.sweep(230, 190, d, 0.02) * self.env(d, 0.055)
+                + 0.5 * self.sweep(360, 330, d, 0.02) * self.env(d, 0.04))
+        crack = np.zeros(int(self.sr * d))
+        n = int(self.sr * 0.004)
+        crack[:n] = self.noise(0.004) * np.linspace(1.0, 0.0, n)
+        wires = self.hp(self.lp(self.noise(d), SNARE_LP_TAPS))
+        wires = self.norm(wires) * self.env(d, 0.12, attack=0.001)
+        return self.norm(body + 0.5 * crack + SNARE_WIRES * wires, 0.95)
 
     def tom_hi(self):
         d = 0.45

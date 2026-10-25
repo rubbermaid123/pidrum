@@ -75,6 +75,19 @@ class TestSounds(unittest.TestCase):
             first = np.argmax(np.abs(x) > 0.05)
             self.assertLess(first, 44100 * 0.003, name)
 
+    def test_snare_distinct_from_toms_and_hihat(self):
+        # Part d'energie : corps (150-400 Hz) et aigus (> 2 kHz)
+        def bands(x, sr=44100):
+            p = np.abs(np.fft.rfft(x)) ** 2
+            f = np.fft.rfftfreq(len(x), 1 / sr)
+            return p[(f > 150) & (f < 400)].sum() / p.sum(), p[f > 2000].sum() / p.sum()
+        s = sounds.Synth(44100)
+        body, hi = bands(s.snare())
+        self.assertGreater(body, 0.3)            # une peau, pas une cymbale
+        self.assertGreater(hi, 0.2)              # des fils, pas un tom
+        self.assertLess(bands(s.tom_hi())[1], 0.05)
+        self.assertGreater(bands(s.hihat())[1], 0.9)
+
     def test_sound_arrays_match_mixer(self):
         for ch in (1, 2):
             a = sounds.to_mixer_array(np.zeros(10), -16, ch)
