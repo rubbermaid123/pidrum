@@ -93,7 +93,8 @@ C'est le point critique pour un instrument de percussion.
 
 - Le kit est lu dans un thread dédié qui déclenche le son dès la frappe, indépendamment du rendu. L'attente de synchronisation verticale de l'écran n'ajoute donc pas de délai.
 - Lister les cartes : `aplay -l`. Sur le Pi 4 : `vc4hdmi0` (port HDMI côté alimentation), `vc4hdmi1` (port HDMI côté jack), `Headphones` (jack 3,5 mm).
-- Le périphérique ALSA par défaut vise `vc4hdmi0`. S'il n'y a rien sur ce port, le son échoue (erreur 524) et le journal affiche « Audio indisponible ». Choisir la sortie avec une surcharge systemd locale (hors dépôt) :
+- **Choix automatique** (`AUDIO_OUTPUT = "auto"` en haut de `pidrum.py`) : le port HDMI dont l'écran accepte l'audio (il le déclare via HDMI, `sad_count` > 0 dans `/proc/asound/card*/eld#*`), sinon le jack. Un moniteur sans haut-parleurs donne donc le jack sans rien configurer. `"jack"` ou `"hdmi"` forcent un choix. Le journal indique la sortie retenue.
+- Pour forcer une sortie précise sans toucher au code, définir `AUDIODEV` dans une surcharge systemd locale (hors dépôt) :
 
 ```
 sudo mkdir -p /etc/systemd/system/pidrum.service.d

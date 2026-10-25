@@ -38,6 +38,9 @@ FPS = 60
 # Rendre en natif 1440p sur le Pi 4 tombe a ~14 FPS ; 720p laisse de la marge.
 RENDER_SIZE = (1280, 720)
 AUDIO_RATE = 48000          # frequence native HDMI et jack du Pi 4 (pas de reechantillonnage)
+AUDIO_OUTPUT = "auto"       # "auto" (HDMI si l'ecran a du son, sinon jack), "hdmi" ou "jack"
+                            # la variable d'environnement AUDIODEV reste prioritaire
+DISPLAY_WAIT = 30.0         # (s) au boot, attente que l'ecran (kmsdrm) soit pret
 AUDIO_BUFFER = 256          # echantillons ; monter a 512 si craquements
 BPM = 70                    # tempo du mode "Le beat"
 BEAT_WINDOW = 0.25          # tolerance (s) autour du temps, genereuse pour 3 ans
@@ -412,29 +415,107 @@ def app_target_pads():
 
 
 # ---------------------------------------------------------------------------
+# Sorties audio et video
+# ---------------------------------------------------------------------------
+
+def hdmi_audio_cards(asound="/proc/asound"):
+    """Cartes ALSA HDMI dont l'ecran accepte l'audio (ELD avec au moins un format)."""
+    found = []
+    try:
+        entries = sorted(os.listdir(asound))
+    except OSError:
+        return found
+    for entry in entries:
+        if not entry.startswith("card"):
+            continue
+        base = os.path.join(asound, entry)
+        try:
+            eld_files = [f for f in os.listdir(base) if f.startswith("eld#")]
+            with open(os.path.join(base, "id")) as f:
+                card_id = f.read().strip()
+        except OSError:
+            continue
+        for eld in eld_files:
+            info = {}
+            try:
+                with open(os.path.join(base, eld)) as f:
+                    for line in f:
+                        parts = line.split(None, 1)
+                        if parts:
+                            info[parts[0]] = parts[1].strip() if len(parts) > 1 else ""
+            except OSError:
+                continue
+            try:
+                sads = int(info.get("sad_count", "0"))
+            except ValueError:
+                sads = 0
+            if sads > 0:
+                found.append(card_id)
+                break
+    return found
+
+
+def pick_audio_device(output=AUDIO_OUTPUT, asound="/proc/asound"):
+    """Retourne la valeur AUDIODEV a utiliser, ou None pour le defaut ALSA."""
+    try:
+        cards = [e for e in sorted(os.listdir(asound)) if e.startswith("card")]
+        ids = []
+        for c in cards:
+            with open(os.path.join(asound, c, "id")) as f:
+                ids.append(f.read().strip())
+    except OSError:
+        return None
+    jack = "Headphones" if "Headphones" in ids else None
+    hdmi = hdmi_audio_cards(asound)
+    if output == "jack":
+        card = jack
+    elif output == "hdmi":
+        card = hdmi[0] if hdmi else None
+    else:
+        card = hdmi[0] if hdmi else jack
+    return "plughw:CARD=%s,DEV=0" % card if card else None
+
+
+def open_display(window):
+    if window:
+        return pygame.display.set_mode(RENDER_SIZE)
+    # Au boot, le pilote vc4 peut ne pas etre pret quand le service demarre
+    deadline = time.monotonic() + DISPLAY_WAIT
+    warned = False
+    while True:
+        try:
+            return pygame.display.set_mode(RENDER_SIZE, pygame.FULLSCREEN | pygame.SCALED)
+        except pygame.error as exc:
+            if time.monotonic() > deadline:
+                raise
+            if not warned:
+                print("Ecran pas encore pret (%s), nouvel essai..." % exc)
+                warned = True
+            pygame.display.quit()
+            time.sleep(1.0)
+            pygame.display.init()
+
+
+# ---------------------------------------------------------------------------
 # Application
 # ---------------------------------------------------------------------------
 
 class App:
     def __init__(self, window=False, use_kit=True):
-        try:
-            pygame.mixer.pre_init(AUDIO_RATE, -16, 2, AUDIO_BUFFER)
-        except Exception:
-            pass
-        pygame.init()
-        if window:
-            self.screen = pygame.display.set_mode(RENDER_SIZE)
-        else:
-            self.screen = pygame.display.set_mode(RENDER_SIZE, pygame.FULLSCREEN | pygame.SCALED)
+        # Pas de pygame.init() : il ouvrirait l'audio avant le choix de la sortie
+        pygame.display.init()
+        self.screen = open_display(window)
         pygame.display.set_caption("PiDrum")
         pygame.mouse.set_visible(False)
         self.layout(*self.screen.get_size())
 
         self.sounds = {}
         try:
-            if not pygame.mixer.get_init():
-                # pygame.init() ignore l'echec du mixer : on reessaie pour avoir l'erreur
-                pygame.mixer.init(AUDIO_RATE, -16, 2, AUDIO_BUFFER)
+            if "AUDIODEV" not in os.environ:
+                dev = pick_audio_device()
+                if dev:
+                    os.environ["AUDIODEV"] = dev
+            pygame.mixer.init(AUDIO_RATE, -16, 2, AUDIO_BUFFER)
             init = pygame.mixer.get_init()
             pygame.mixer.set_num_channels(32)
             self.sounds = build_sounds(pygame, init)

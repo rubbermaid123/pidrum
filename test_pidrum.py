@@ -210,6 +210,34 @@ class TestEvdevThread(unittest.TestCase):
                     pass
 
 
+class TestAudioPick(unittest.TestCase):
+    def fake_asound(self, cards):
+        # cards : liste de (id, sad_count ou None si pas d'ELD)
+        import tempfile
+        root = tempfile.mkdtemp()
+        for i, (card_id, sads) in enumerate(cards):
+            d = os.path.join(root, "card%d" % i)
+            os.makedirs(d)
+            with open(os.path.join(d, "id"), "w") as f:
+                f.write(card_id + "\n")
+            if sads is not None:
+                with open(os.path.join(d, "eld#0"), "w") as f:
+                    f.write("monitor_name\t\tHP E273q\nsad_count\t\t%d\n" % sads)
+        return root
+
+    def test_monitor_without_speakers_uses_jack(self):
+        root = self.fake_asound([("vc4hdmi0", 0), ("vc4hdmi1", 0), ("Headphones", None)])
+        self.assertEqual(pidrum.pick_audio_device("auto", root), "plughw:CARD=Headphones,DEV=0")
+
+    def test_tv_with_audio_uses_its_hdmi(self):
+        root = self.fake_asound([("vc4hdmi0", 0), ("vc4hdmi1", 3), ("Headphones", None)])
+        self.assertEqual(pidrum.pick_audio_device("auto", root), "plughw:CARD=vc4hdmi1,DEV=0")
+        self.assertEqual(pidrum.pick_audio_device("jack", root), "plughw:CARD=Headphones,DEV=0")
+
+    def test_no_asound_keeps_default(self):
+        self.assertIsNone(pidrum.pick_audio_device("auto", os.path.join(HERE, "absent")))
+
+
 class TestMapAnalyze(unittest.TestCase):
     def hits(self, *sets):
         return [(set(s), {}) for s in sets]
