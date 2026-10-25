@@ -1,0 +1,4 @@
+pads.json
+shots/
+__pycache__/
+*.pyc
