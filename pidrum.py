@@ -47,7 +47,8 @@ BEAT_WINDOW = 0.25          # tolerance (s) autour du temps, genereuse pour 3 an
 BEAT_GOAL = 8               # bonnes frappes avant la fanfare et le niveau suivant
 JUDGE_OFFSET = 0.0          # (s) compense la latence TV si les frappes semblent en retard
 HOLD_TO_SWITCH = 1.5        # duree d'appui sur START pour changer de mode
-DEBOUNCE = 0.03             # ignore les doubles declenchements d'un meme pad
+DEBOUNCE = 0.08             # ignore les doubles declenchements d'un meme pad
+                            # (le pad vert du kit rebondit ~60 ms apres le coup)
 KICK_IN_GAMES = False       # inclure la pedale dans Copie-moi / Le beat
 SIMON_MAX_LEN = 4           # longueur max des sequences de Copie-moi
 SIMON_HINT_DELAY = 2.5      # (s) avant d'indiquer le pad attendu (sequences >= 2)

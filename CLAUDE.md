@@ -6,8 +6,22 @@ Batterie d'apprentissage pour un enfant de 3 ans qui ne lit pas encore. Un vieux
 
 - Le kit est un **Guitar Hero 5 voies** (World Tour ou GH5/Warriors of Rock), **pas un Rock Band** malgré la description du projet. Il comprend 3 pads (rouge, bleu, vert), 2 cymbales (jaune, orange) et 1 pédale de grosse caisse. Le boîtier central porte START, SELECT et PS.
 - Le kit se connecte par un dongle USB sans fil propriétaire, que l'utilisateur possède. Sous Linux, il apparaît comme un périphérique HID joystick lisible via **evdev** (`/dev/input/event*`).
-- Le mapping exact des boutons n'a **pas encore été validé sur le vrai kit**. `map_pads.py` le détecte et écrit `pads.json`. Un rôle peut être un code unique ou une combinaison `[code, code]` (couleur + modificateur). Ne jamais coder en dur des codes evdev dans `pidrum.py`.
-- La vélocité (force de frappe) n'est pas encore gérée. `map_pads.py` affiche les axes ABS qui bougent pendant les frappes, en vue d'une implémentation future.
+- Le kit réel est un **GH World Tour PS3**, USB `12ba:0120`, nom evdev `RedOctane MIDI Drum GuitarHero for Playstation (R) 3`, pilote `hid-generic`. Mapping relevé le 2026-10-25 (un bouton par élément, aucune combinaison) :
+
+  | Élément | Code | Statut |
+  |---|---|---|
+  | rouge | `BTN_C` (306) | vérifié |
+  | bleu | `BTN_A` (304) | vérifié |
+  | vert | `BTN_B` (305) | vérifié, **rebond ~60 ms** à chaque coup |
+  | orange | `BTN_Z` (309) | vérifié |
+  | jaune | `BTN_NORTH` (307) | **déduit** (connecteur brisé, à réparer) |
+  | pédale | `BTN_WEST` (308) | **déduit** (muette au mapping) |
+  | START | `BTN_TL2` (312) | vérifié |
+  | SELECT | `BTN_TR2` (313) | vérifié |
+
+  Les codes déduits suivent la disposition PS3 standard (triangle, L1), cohérente avec les éléments vérifiés. `pads.json` les liste dans `unverified`. `map_pads.py` reste l'outil de référence. Ne jamais coder en dur des codes evdev dans `pidrum.py`. Un rôle peut aussi être une combinaison `[code, code]`.
+- Le kit s'appaire avec un délai après la mise sous tension : le dongle envoie des rapports « repos » (hat 0x0f, axes 0x80) tant que le kit ne transmet pas.
+- **Aucun axe ABS ne bouge pendant les frappes** : pas de vélocité exposée par `hid-generic` pour ce kit. Une vélocité éventuelle demanderait de lire `/dev/hidraw*` directement.
 
 ## Plateforme cible
 
