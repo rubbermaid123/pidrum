@@ -34,6 +34,9 @@ from sounds import build_sounds  # noqa: E402
 # ---------------------------------------------------------------------------
 
 FPS = 60
+# Rendu logiciel dans cette taille, agrandi par le GPU au plein ecran (pygame.SCALED).
+# Rendre en natif 1440p sur le Pi 4 tombe a ~14 FPS ; 720p laisse de la marge.
+RENDER_SIZE = (1280, 720)
 AUDIO_RATE = 48000          # frequence native HDMI et jack du Pi 4 (pas de reechantillonnage)
 AUDIO_BUFFER = 256          # echantillons ; monter a 512 si craquements
 BPM = 70                    # tempo du mode "Le beat"
@@ -420,9 +423,9 @@ class App:
             pass
         pygame.init()
         if window:
-            self.screen = pygame.display.set_mode((1280, 720))
+            self.screen = pygame.display.set_mode(RENDER_SIZE)
         else:
-            self.screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+            self.screen = pygame.display.set_mode(RENDER_SIZE, pygame.FULLSCREEN | pygame.SCALED)
         pygame.display.set_caption("PiDrum")
         pygame.mouse.set_visible(False)
         self.layout(*self.screen.get_size())
