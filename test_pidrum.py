@@ -80,11 +80,13 @@ class TestSounds(unittest.TestCase):
         def bands(x, sr=44100):
             p = np.abs(np.fft.rfft(x)) ** 2
             f = np.fft.rfftfreq(len(x), 1 / sr)
-            return p[(f > 150) & (f < 400)].sum() / p.sum(), p[f > 2000].sum() / p.sum()
+            return p[f < 400].sum() / p.sum(), p[f > 2000].sum() / p.sum()
         s = sounds.Synth(44100)
-        body, hi = bands(s.snare())
-        self.assertGreater(body, 0.3)            # une peau, pas une cymbale
-        self.assertGreater(hi, 0.2)              # des fils, pas un tom
+        low, hi = bands(s.snare())
+        self.assertGreater(low, 0.6)             # une peau ronde, pas une cymbale
+        self.assertGreater(hi, 0.08)             # des fils, pas un tom
+        rms = lambda x: float(np.sqrt(np.mean(x[:2205] ** 2)))   # 50 premieres ms
+        self.assertGreater(rms(s.snare()), 0.7 * rms(s.tom_hi()))   # pas plus faible
         self.assertLess(bands(s.tom_hi())[1], 0.05)
         self.assertGreater(bands(s.hihat())[1], 0.9)
 

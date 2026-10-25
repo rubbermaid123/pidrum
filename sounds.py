@@ -7,7 +7,10 @@
 import numpy as np
 
 SNARE_LP_TAPS = 5       # passe-bas des fils de caisse claire (plus grand = plus sourd)
-SNARE_WIRES = 1.0       # part des fils face au corps de la peau (~60 % corps / 37 % > 2 kHz)
+SNARE_WIRES = 0.7       # part des fils face au corps de la peau
+SNARE_DRIVE = 2.0       # saturation douce (tanh) : 1 = aucune
+SNARE_BODY_DECAY = 0.11 # (s) resonance de la peau : plus long = plus de rondeur
+SNARE_THUMP = 0.8       # impact grave (~140 -> 95 Hz) au moment de la frappe
 
 
 class Synth:
@@ -88,15 +91,18 @@ class Synth:
     def snare(self):
         # Caisse claire : corps (2 modes de la peau), claquement, timbre en bande 1-8 kHz.
         # Le bruit blanc filtre seulement en passe-haut sonnait comme la charleston.
-        d = 0.35
-        body = (self.sweep(230, 190, d, 0.02) * self.env(d, 0.055)
-                + 0.5 * self.sweep(360, 330, d, 0.02) * self.env(d, 0.04))
+        d = 0.4
+        body = (self.sweep(210, 175, d, 0.025) * self.env(d, SNARE_BODY_DECAY)
+                + 0.45 * self.sweep(350, 320, d, 0.02) * self.env(d, 0.05))
+        thump = self.sweep(140, 95, d, 0.02) * self.env(d, 0.035) * SNARE_THUMP
         crack = np.zeros(int(self.sr * d))
         n = int(self.sr * 0.004)
         crack[:n] = self.noise(0.004) * np.linspace(1.0, 0.0, n)
         wires = self.hp(self.lp(self.noise(d), SNARE_LP_TAPS))
         wires = self.norm(wires) * self.env(d, 0.12, attack=0.001)
-        return self.norm(body + 0.5 * crack + SNARE_WIRES * wires, 0.95)
+        x = self.norm(body + thump + 0.4 * crack + SNARE_WIRES * wires)
+        # Saturation douce : remonte le corps (le pic venait du claquement), plus de punch
+        return self.norm(np.tanh(SNARE_DRIVE * x), 0.95)
 
     def tom_hi(self):
         d = 0.45
