@@ -1,0 +1,3 @@
+# Fichiers destines au Pi (Linux) : toujours LF, meme sur une copie Windows
+* text=auto eol=lf
+*.png binary
