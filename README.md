@@ -3,6 +3,22 @@
 Batterie d'apprentissage pour jeune enfant : kit Guitar Hero (PS3) + Raspberry Pi 4 + TV.
 Aucun texte à l'écran, tout passe par les couleurs, les sons et les animations.
 
+## Aperçu
+
+L'écran reproduit le kit vu par l'enfant : cymbales en haut, pads au milieu, pédale en bas.
+
+| Jeu libre | Copie-moi | Le beat |
+|---|---|---|
+| ![Jeu libre : le pad rouge et la cymbale orange viennent d'être frappés](docs/images/jeu-libre.png) | ![Copie-moi : l'anneau blanc pulsant indique le pad à frapper](docs/images/copie-moi.png) | ![Le beat : un point rempli par bonne frappe, l'anneau se referme sur le pad au temps](docs/images/le-beat.png) |
+| Chaque frappe : son, éclat et onde | Le pad attendu pulse en blanc | L'anneau se referme sur le pad pile au temps |
+
+| Changement de mode | Extinction |
+|---|---|
+| ![Trois gros points : mode 3](docs/images/changement-de-mode.png) | ![Fondu de vieille télé](docs/images/extinction.png) |
+| Appui long sur START : 1, 2 ou 3 gros points | SELECT + START : la télé « s'éteint » |
+
+Ces images sont produites par `test_pidrum.py` (copies dans `docs/images/`).
+
 ## Fichiers
 
 - `pidrum.py` : l'application (3 modes)
