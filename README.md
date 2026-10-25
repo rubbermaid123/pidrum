@@ -12,10 +12,10 @@ L'écran reproduit le kit vu par l'enfant : cymbales en haut, pads au milieu, p�
 | ![Jeu libre : le pad rouge et la cymbale orange viennent d'être frappés](docs/images/jeu-libre.png) | ![Copie-moi : l'anneau blanc pulsant indique le pad à frapper](docs/images/copie-moi.png) | ![Le beat : un point rempli par bonne frappe, l'anneau se referme sur le pad au temps](docs/images/le-beat.png) |
 | Chaque frappe : son, éclat et onde | Le pad attendu pulse en blanc | L'anneau se referme sur le pad pile au temps |
 
-| Changement de mode | Extinction |
-|---|---|
-| ![Trois gros points : mode 3](docs/images/changement-de-mode.png) | ![Fondu de vieille télé](docs/images/extinction.png) |
-| Appui long sur START : 1, 2 ou 3 gros points | SELECT + START : la télé « s'éteint » |
+| Chanson | Changement de mode | Extinction |
+|---|---|---|
+| ![Chanson : des notes descendent vers les pads, le pad visé pulse](docs/images/chanson.png) | ![Trois gros points : mode 3](docs/images/changement-de-mode.png) | ![Fondu de vieille télé](docs/images/extinction.png) |
+| Les notes descendent sur la musique | Appui long sur START : 1 à 4 gros points | SELECT + START : la télé « s'éteint » |
 
 Ces images sont produites par `test_pidrum.py` (copies dans `docs/images/`).
 
@@ -23,17 +23,19 @@ Ces images sont produites par `test_pidrum.py` (copies dans `docs/images/`).
 
 - `pidrum.py` : l'application (3 modes)
 - `sounds.py` : synthèse des sons de batterie (aucun fichier audio requis)
+- `songs.py` : comptines du mode chanson (mélodies, partitions par niveau, synthèse de la musique)
 - `map_pads.py` : détection des boutons du kit, génère `pads.json`
 - `pidrum.service` : démarrage automatique au boot
 - `test_pidrum.py` : tests headless (aucun kit ni écran requis), captures dans `shots/`
 
 ## Modes
 
-Appui **long** (1,5 s) sur START du kit pour passer au mode suivant. Une jauge apparaît en haut à droite pendant l'appui, puis 1, 2 ou 3 gros points indiquent le mode choisi. Un appui court est ignoré, donc l'enfant ne change pas de mode par accident.
+Appui **long** (1,5 s) sur START du kit pour passer au mode suivant. Une jauge apparaît en haut à droite pendant l'appui, puis 1 à 4 gros points indiquent le mode choisi. Un appui court est ignoré, donc l'enfant ne change pas de mode par accident.
 
 1. **Jeu libre** : chaque pad joue son son et s'illumine. Après 20 s sans frappe, un pad « appelle » doucement l'enfant.
 2. **Copie-moi** : le jeu joue un pad (ou une séquence) et l'enfant le reproduit. Le pad attendu clignote en blanc. Après 3 réussites, la séquence s'allonge (max 4). Après plusieurs erreurs, elle raccourcit. Il n'y a jamais de son d'échec.
 3. **Le beat** : métronome à 70 BPM. Un anneau blanc se referme sur le pad à frapper et le touche exactement sur le temps. Chaque bonne frappe remplit un point en haut. À 8 points, une fanfare joue et le motif suivant commence (une couleur, puis deux en alternance, etc.).
+4. **Chanson** : une comptine du domaine public joue (*Frère Jacques*, *Au clair de la lune*, *Ah ! vous dirai-je maman*, synthétisées). Des notes de couleur descendent le long de pistes vers les pads, le pad visé pulse à l'approche, et une note frappée à temps donne des étoiles. Une note manquée s'efface doucement : la chanson va toujours au bout, puis une fête lance la suivante. La densité s'adapte : une note tous les 2 temps au départ, chaque temps si l'enfant réussit 70 % des notes, toutes les notes ensuite.
 
 **Éteindre le Pi proprement** : maintenir **SELECT + START** ensemble 3 s. La jauge en haut à droite devient bleue, puis une petite mélodie descendante joue et l'écran s'éteint comme une vieille télé. Attendre que la LED verte du Pi ne clignote plus avant de couper le courant. Cela évite de corrompre la carte SD. Nécessite la règle sudoers (voir « Démarrage automatique »). Sans elle, le jeu reprend simplement et le journal l'indique.
 
@@ -171,4 +173,4 @@ Tout est en haut de `pidrum.py` : `BPM`, `BEAT_WINDOW` (tolérance), `BEAT_GOAL`
 
 - Vélocité : volume selon la force de frappe, une fois les axes connus
 - Vrais échantillons .wav à la place des sons synthétisés
-- Mode « chanson » : accompagnement musical simple sur lequel taper le beat
+- Chansons : charger tes propres fichiers audio avec une partition à côté

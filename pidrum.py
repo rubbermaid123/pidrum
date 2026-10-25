@@ -8,9 +8,12 @@
 #   1. Jeu libre  : chaque pad joue son son et s'illumine
 #   2. Copie-moi  : l'ecran montre une sequence, l'enfant la reproduit
 #   3. Le beat    : frapper le pad indique, au rythme du metronome
+#   4. Chanson    : une comptine joue, des notes descendent vers les pads
+#
+# SELECT + START maintenus 3 s : extinction propre du Pi
 #
 # Clavier (tests / parent) : 1-5 = pads, espace = pedale, Entree = START,
-#                            Echap = quitter
+#                            Tab = SELECT, Echap = quitter
 
 import argparse
 import collections
@@ -28,6 +31,7 @@ import time
 os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 import pygame  # noqa: E402
 
+import songs  # noqa: E402
 from sounds import build_sounds  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -66,6 +70,17 @@ COPY_ERRORS_TO_SHRINK = 5   # erreurs dans une manche avant de la raccourcir
 COPY_PAUSE_WIN = 2.2        # (s) de fete apres une sequence reussie
 BEAT_LEAD_IN = 2            # temps de metronome avant le premier temps juge
 BEAT_REST_AFTER_GOAL = 4    # temps de pause apres la fanfare
+SONG_LEAD = 2.5             # (s) trajet d'une note du haut de l'ecran jusqu'au pad
+SONG_WINDOW = 0.30          # tolerance (s) autour de l'arrivee d'une note
+SONG_VOLUME = 0.7           # volume de la musique (les frappes restent au-dessus)
+SONG_START_DELAY = 1.0      # (s) avant le decompte de la premiere chanson
+SONG_PAUSE = 3.0            # (s) de fete entre deux chansons
+SONG_MAX_LEVEL = 2          # 0 : une note / 2 temps, 1 : chaque temps, 2 : toutes
+SONG_LEVEL_UP = 0.7         # taux de reussite pour densifier la chanson suivante
+SONG_LEVEL_DOWN = 0.3       # taux en dessous duquel on allege
+SONG_MISS_FADE = 0.4        # (s) disparition douce d'une note manquee
+SONG_CUE = 0.3              # fraction du trajet ou le pad vise se met a pulser
+SONG_PAD_ORDER = ["red", "blue", "green", "orange", "yellow", "kick"]  # grave -> aigu
 MAX_PARTICLES = 500
 RECONNECT_EVERY = 2.0       # (s) entre deux recherches du kit
 
@@ -259,6 +274,14 @@ class Mode:
     def draw(self, app, surf, t):
         pass
 
+    def draw_back(self, app, surf, t):
+        # Dessine sous les pads (decor du mode)
+        pass
+
+    def leave(self, app):
+        # Appele quand on quitte le mode (changement de mode, extinction)
+        pass
+
 
 class FreePlay(Mode):
     dots = 1
@@ -421,6 +444,139 @@ class Beat(Mode):
 
 
 
+class Song(Mode):
+    """Comptine + notes qui descendent vers les pads, facon Rock Band.
+
+    Pas d'echec : la chanson va toujours au bout, une note manquee s'efface.
+    """
+    dots = 4
+
+    def enter(self, app, t):
+        self.app = app
+        self.song_idx = 0
+        self.level = 0
+        self.channel = None
+        self.start_song(t + SONG_START_DELAY)
+
+    def leave(self, app):
+        if self.channel is not None:
+            self.channel.stop()
+            self.channel = None
+
+    def start_song(self, t0):
+        self.song = songs.SONGS[self.song_idx]
+        self.period = 60.0 / self.song["bpm"]
+        self.start_at = t0
+        self.audio_t0 = None
+        self.state = "wait"
+        order = [p for p in SONG_PAD_ORDER if p in self.app.target_pads()]
+        self.chart = songs.chart(self.song, self.level, order)
+        self.notes = []
+        self.hits = 0
+
+    def begin_play(self, t):
+        # Les notes sont calees sur l'instant reel ou la musique part
+        self.audio_t0 = t
+        self.channel = self.app.play("song_" + self.song["id"], SONG_VOLUME)
+        base = t + songs.COUNT_IN * self.period
+        self.notes = [{"t": base + b * self.period, "pad": pad, "state": "pending", "done": 0.0}
+                      for b, pad in self.chart]
+        beats = songs.COUNT_IN + songs.length_beats(self.song) + songs.TAIL
+        self.end_t = t + beats * self.period
+        self.state = "play"
+
+    def update(self, app, t):
+        if self.state == "wait":
+            if t >= self.start_at:
+                self.begin_play(t)
+        elif self.state == "play":
+            for n in self.notes:
+                if n["state"] == "pending" and t - JUDGE_OFFSET - n["t"] > SONG_WINDOW:
+                    n["state"], n["done"] = "miss", t
+            if t >= self.end_t:
+                self.finish(t)
+        elif self.state == "pause":
+            if t >= self.pause_until:
+                self.start_song(t)
+
+    def finish(self, t):
+        self.channel = None
+        rate = self.hits / len(self.notes) if self.notes else 1.0
+        if rate >= SONG_LEVEL_UP and self.level < SONG_MAX_LEVEL:
+            self.level += 1
+        elif rate <= SONG_LEVEL_DOWN and self.level > 0:
+            self.level -= 1
+        # Toujours la fete a la fin d'une chanson, quel que soit le score
+        self.app.celebrate(t)
+        self.song_idx = (self.song_idx + 1) % len(songs.SONGS)
+        self.state = "pause"
+        self.pause_until = t + SONG_PAUSE
+
+    def on_hit(self, app, pad, t):
+        if self.state != "play":
+            return
+        tj = t - JUDGE_OFFSET
+        best = None
+        for n in self.notes:
+            if n["state"] == "pending" and n["pad"] == pad and abs(tj - n["t"]) <= SONG_WINDOW:
+                if best is None or abs(tj - n["t"]) < abs(tj - best["t"]):
+                    best = n
+        if best is not None:
+            best["state"], best["done"] = "hit", t
+            self.hits += 1
+            app.burst(pad, n=8, stars=True)
+
+    def vanishing_point(self, w, h):
+        return w * 0.5, -h * 0.02
+
+    def draw_back(self, app, surf, t):
+        w, h = surf.get_size()
+        vx, vy = self.vanishing_point(w, h)
+        # Pistes : du haut de l'ecran vers chaque pad utilise par la chanson
+        for pad in {p for _, p in self.chart}:
+            cx, cy, _, _ = app.geo[pad]
+            pygame.draw.line(surf, lerp(BG, PADS[pad]["color"], 0.4), (vx, vy), (cx, cy), 4)
+        # Progression de la chanson : fine barre en haut
+        if self.state == "play":
+            p = min(1.0, (t - self.audio_t0) / (self.end_t - self.audio_t0))
+            pygame.draw.rect(surf, DARK_FILL, (int(w * 0.3), int(h * 0.02), int(w * 0.4), 6), border_radius=3)
+            pygame.draw.rect(surf, (200, 200, 220), (int(w * 0.3), int(h * 0.02), int(w * 0.4 * p), 6), border_radius=3)
+
+    def draw(self, app, surf, t):
+        w, h = surf.get_size()
+        vx, vy = self.vanishing_point(w, h)
+        # Le pad dont la note arrive bientot pulse : c'est le moment de frapper
+        soon = {n["pad"] for n in self.notes
+                if n["state"] == "pending" and -SONG_WINDOW <= n["t"] - t <= SONG_LEAD * SONG_CUE}
+        for pad in soon:
+            app.draw_target(surf, pad, t)
+        for n in self.notes:
+            if n["state"] == "hit":
+                continue
+            if n["state"] == "miss":
+                fade = (t - n["done"]) / SONG_MISS_FADE
+                if fade >= 1.0:
+                    continue
+                frac, alpha = 0.0, 1.0 - fade
+            else:
+                frac = (n["t"] - t) / SONG_LEAD
+                if frac > 1.0:
+                    continue
+                frac, alpha = max(0.0, frac), 1.0
+            self.draw_note(app, surf, n["pad"], frac, alpha, vx, vy)
+
+    def draw_note(self, app, surf, pad, frac, alpha, vx, vy):
+        # frac = 1 en haut de l'ecran, 0 pile sur le pad
+        cx, cy, rx, ry = app.geo[pad]
+        x = cx + (vx - cx) * frac
+        y = cy + (vy - cy) * frac
+        size = max(rx, ry) * 0.55 * (1.0 - 0.65 * frac)
+        col = lerp(BG, PADS[pad]["color"], alpha)
+        rim = lerp(BG, WHITE, alpha)
+        pygame.draw.circle(surf, col, (int(x), int(y)), max(2, int(size)))
+        pygame.draw.circle(surf, rim, (int(x), int(y)), max(2, int(size)), max(2, int(size * 0.18)))
+
+
 # ---------------------------------------------------------------------------
 # Sorties audio et video
 # ---------------------------------------------------------------------------
@@ -531,6 +687,9 @@ class App:
             init = pygame.mixer.get_init()
             pygame.mixer.set_num_channels(32)
             self.sounds = build_sounds(pygame, init)
+            t_songs = time.monotonic()
+            self.sounds.update(songs.build_song_sounds(pygame, init))
+            print("Chansons synthetisees en %.1f s" % (time.monotonic() - t_songs))
             print("Audio : %d Hz, format %d, %d canaux, sortie %s"
                   % (init + (os.environ.get("AUDIODEV", "default"),)))
         except Exception as exc:
@@ -565,7 +724,7 @@ class App:
             else:
                 print("pads.json absent : lancer map_pads.py. Clavier seulement.")
 
-        self.modes = [FreePlay(), CopyMe(), Beat()]
+        self.modes = [FreePlay(), CopyMe(), Beat(), Song()]
         self.mode_idx = 0
         self.mode = self.modes[0]
         self.mode.enter(self, now)
@@ -609,10 +768,12 @@ class App:
 
     def play(self, name, volume=1.0):
         s = self.sounds.get(name)
-        if s is not None:
-            ch = s.play()
-            if ch is not None:
-                ch.set_volume(volume)
+        if s is None:
+            return None
+        ch = s.play()
+        if ch is not None:
+            ch.set_volume(volume)
+        return ch
 
     # --- effets -----------------------------------------------------------
 
@@ -729,6 +890,7 @@ class App:
                     self.handle(kind, KEYBOARD[ev.key], time.monotonic())
 
     def switch_mode(self, t):
+        self.mode.leave(self)
         self.mode_idx = (self.mode_idx + 1) % len(self.modes)
         self.mode = self.modes[self.mode_idx]
         self.effects.clear()
@@ -747,6 +909,7 @@ class App:
         print("Extinction demandee (SELECT + START)")
         self.shutdown_at = t
         self.start_down_at = self.select_down_at = None
+        self.mode.leave(self)
         self.play("bye")
 
     def request_poweroff(self):
@@ -895,6 +1058,7 @@ class App:
             ease = 1 - (1 - p) ** 2
             r = int(e["r0"] + (e["r1"] - e["r0"]) * ease)
             pygame.draw.circle(surf, lerp(e["col"], BG, p), e["c"], r, e["w"])
+        self.mode.draw_back(self, surf, t)
         for pad in PADS:
             if pad not in self.disabled:
                 self.draw_pad(surf, pad)

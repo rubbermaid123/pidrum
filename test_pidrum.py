@@ -22,6 +22,7 @@ import pygame  # noqa: E402
 
 import map_pads  # noqa: E402
 import pidrum  # noqa: E402
+import songs  # noqa: E402
 import sounds  # noqa: E402
 
 DT = 1 / 60
@@ -79,6 +80,42 @@ class TestSounds(unittest.TestCase):
             a = sounds.to_mixer_array(np.zeros(10), -16, ch)
             self.assertEqual(a.dtype, np.int16)
             self.assertEqual(a.shape, (10,) if ch == 1 else (10, ch))
+
+
+class TestSongs(unittest.TestCase):
+    PADS4 = ["red", "blue", "green", "orange"]
+
+    def test_render_finite_bounded_with_count_in(self):
+        s = sounds.Synth(48000)
+        for song in songs.SONGS:
+            x = songs.render(song, s)
+            self.assertTrue(np.all(np.isfinite(x)), song["id"])
+            self.assertLessEqual(float(np.max(np.abs(x))), 1.0, song["id"])
+            period = 60.0 / song["bpm"]
+            beats = songs.COUNT_IN + songs.length_beats(song) + songs.TAIL
+            self.assertAlmostEqual(len(x) / 48000, beats * period, delta=0.2)
+
+    def test_chart_levels_get_denser(self):
+        for song in songs.SONGS:
+            counts = [len(songs.chart(song, lv, self.PADS4)) for lv in range(3)]
+            self.assertGreater(counts[0], 0, song["id"])
+            self.assertLessEqual(counts[0], counts[1])
+            self.assertLessEqual(counts[1], counts[2])
+            # niveau 0 : au moins 2 temps entre deux notes
+            beats = [b for b, _ in songs.chart(song, 0, self.PADS4)]
+            self.assertTrue(all(b2 - b1 >= 2 for b1, b2 in zip(beats, beats[1:])))
+
+    def test_chart_only_uses_given_pads(self):
+        for song in songs.SONGS:
+            for lv in range(3):
+                used = {p for _, p in songs.chart(song, lv, ["red", "blue"])}
+                self.assertTrue(used <= {"red", "blue"})
+            self.assertEqual(songs.chart(song, 0, []), [])
+
+    def test_count_in_longer_than_lead(self):
+        # Une note doit pouvoir faire tout son trajet apres le depart de la musique
+        for song in songs.SONGS:
+            self.assertGreaterEqual(songs.COUNT_IN * 60.0 / song["bpm"], pidrum.SONG_LEAD)
 
 
 class TestKeyDecoder(unittest.TestCase):
@@ -360,6 +397,61 @@ class TestApp(unittest.TestCase):
         self.assertIsNone(self.h.app.shutdown_at)
         self.assertIsInstance(self.h.app.mode, pidrum.FreePlay)
 
+    def start_song_mode(self):
+        self.h.goto(pidrum.Song)
+        m = self.h.app.mode
+        while m.state != "play":
+            self.h.run(0.1)
+        return m
+
+    def play_notes(self, m, offset=0.0, pad_of=None, upto=None, start=0):
+        for n in list(m.notes)[start:upto]:
+            target = n["t"] + pidrum.JUDGE_OFFSET + offset
+            if target > self.h.t:
+                self.h.run(target - self.h.t)
+            self.h.t = max(self.h.t, target)
+            self.h.hit(pad_of(n) if pad_of else n["pad"])
+
+    def test_song_all_notes_hit_levels_up_and_next_song(self):
+        m = self.start_song_mode()
+        first = m.song["id"]
+        self.assertIsNotNone(m.channel)
+        self.play_notes(m, offset=0.1)
+        self.assertEqual(m.hits, len(m.notes))
+        self.h.run(m.end_t - self.h.t + 0.1)
+        self.assertEqual(m.state, "pause")
+        self.assertEqual(m.level, 1)
+        self.h.run(pidrum.SONG_PAUSE + 0.1)
+        self.assertNotEqual(m.song["id"], first)
+
+    def test_song_wrong_pad_or_off_time_not_counted_and_song_continues(self):
+        m = self.start_song_mode()
+        other = {"red": "blue", "blue": "red", "green": "red", "orange": "red"}
+        self.play_notes(m, pad_of=lambda n: other[n["pad"]], upto=3)
+        self.play_notes(m, offset=pidrum.SONG_WINDOW + 0.05, start=3, upto=6)
+        self.assertEqual(m.hits, 0)
+        self.h.run(m.end_t - self.h.t + 0.1)
+        self.assertEqual(m.state, "pause")       # toujours au bout
+        self.assertEqual(m.level, 0)             # ne descend pas sous 0
+        self.assertTrue(all(n["state"] == "miss" for n in m.notes))
+
+    def test_song_leaving_mode_stops_music(self):
+        m = self.start_song_mode()
+        stopped = []
+
+        class FakeChannel:
+            def stop(self):
+                stopped.append(True)
+        m.channel = FakeChannel()
+        self.h.hold_start(pidrum.HOLD_TO_SWITCH + 0.1)
+        self.assertIsInstance(self.h.app.mode, pidrum.FreePlay)
+        self.assertEqual(stopped, [True])
+
+    def test_song_respects_disabled_pads(self):
+        self.h.app.disabled = {"yellow", "kick", "orange"}
+        m = self.start_song_mode()
+        self.assertTrue({n["pad"] for n in m.notes} <= {"red", "blue", "green"})
+
     def test_disabled_pads_never_requested(self):
         app = self.h.app
         app.disabled = {"yellow", "kick"}
@@ -502,6 +594,18 @@ class TestShots(unittest.TestCase):
         h.hit(b.target(3))
         h.run(0.1)
         h.shot("3_beat_reward")
+        h.goto(pidrum.Song)
+        s = h.app.mode
+        while s.state != "play":
+            h.run(0.1)
+        h.run(s.notes[2]["t"] - h.t - 0.6)
+        h.hit(s.notes[1]["pad"]) if abs(s.notes[1]["t"] - h.t) < pidrum.SONG_WINDOW else None
+        h.shot("5_song_track")
+        h.t = s.notes[2]["t"]
+        h.hit(s.notes[2]["pad"])
+        h.run(0.1)
+        h.shot("5_song_hit")
+        h.goto(pidrum.FreePlay)
         old = pidrum.SHUTDOWN_CMD
         pidrum.SHUTDOWN_CMD = [sys.executable, "-c", "pass"]
         try:

@@ -36,7 +36,10 @@ Batterie d'apprentissage pour un enfant de 3 ans qui ne lit pas encore. Un vieux
 | Fichier | Rôle |
 |---|---|
 | `pidrum.py` | Application : boucle principale, entrée evdev, rendu, 3 modes |
-| `sounds.py` | Synthèse numpy de tous les sons (batterie, jingle, ding, métronome) |
+| `sounds.py` | Synthèse numpy de tous les sons (batterie, jingle, ding, métronome, au revoir) |
+| `songs.py` | Comptines du domaine public : mélodies, `chart()` par niveau, `render()` de la musique |
+| `pidrum-poweroff.sudoers` | Règle sudoers limitée à `systemctl poweroff` |
+| `docs/images/` | Captures pour le README (copiées depuis `shots/`) |
 | `map_pads.py` | Outil CLI de mapping, frapper chaque élément 3 fois, produit `pads.json` ; `analyze()` est testable sans evdev |
 | `test_pidrum.py` | Tests headless unittest + captures PNG dans `shots/` |
 | `pidrum.service` | Unité systemd |
@@ -55,6 +58,8 @@ Batterie d'apprentissage pour un enfant de 3 ans qui ne lit pas encore. Un vieux
   - `FreePlay` : jeu libre, avec une invitation visuelle après `IDLE_HINT_AFTER` secondes sans frappe.
   - `CopyMe` : type Simon, avec les états `show`, `wait` et `pause`. Difficulté adaptative de longueur 1 à 4.
   - `Beat` : métronome avec des anneaux d'approche qui se referment sur le pad pile sur le temps. Les motifs sont dans `PATTERNS` et le niveau suivant arrive après `BEAT_GOAL` réussites.
+  - `Song` : états `wait`, `play` et `pause`. La musique (`song_<id>`, synthétisée par `songs.py` au démarrage) part dans `begin_play()` et les notes sont calées sur cet instant réel, après `songs.COUNT_IN` temps de décompte (doit rester ≥ `SONG_LEAD`). Partition par niveau via `songs.chart()` (hauteur → pad selon `SONG_PAD_ORDER`, limité à `app.target_pads()`). Pistes et barre de progression dans `draw_back`, notes dans `draw`. Pas d'échec : fin de chanson = `celebrate`, niveau ajusté selon `SONG_LEVEL_UP` / `SONG_LEVEL_DOWN`. `leave()` coupe la musique.
+- **Hooks de mode** : `draw_back` (sous les pads) et `leave` (changement de mode, extinction) en plus de `enter`, `on_hit`, `update` et `draw`.
 - **API d'effets** pour les modes : `app.demo(pad, t)`, `app.reward(pad, t)`, `app.celebrate(t)`, `app.ring(pad, t)`, `app.burst(pad)`, `app.draw_target(surf, pad, t)`, `app.draw_approach(surf, pad, frac)`, `app.play(name, volume)`.
 - **Changement de mode** : appui long sur START (`HOLD_TO_SWITCH`). Les appuis courts sont ignorés exprès, parce que l'enfant tape sur le boîtier. Si SELECT est tenu, START ne change pas de mode.
 - **Extinction** : SELECT + START tenus `SHUTDOWN_HOLD` s → `begin_shutdown()` (son `bye`, fondu `draw_shutdown`) → après `SHUTDOWN_FADE` s, `request_poweroff()` lance `SHUTDOWN_CMD` (`sudo -n systemctl poweroff`, autorisé par `pidrum-poweroff.sudoers`). En cas de refus : message console, le jeu reprend (aucun retour négatif).
@@ -114,7 +119,7 @@ journalctl -u pidrum -f
 2. **Mesurer la latence réelle** sur le Pi (thread kit vs vsync kmsdrm, `AUDIO_BUFFER` 256 sur HDMI/jack).
 3. **Vélocité** : volume (`channel.set_volume`) selon l'axe ABS associé à chaque pad, une fois les axes connus. Prévoir un champ optionnel `vel_abs` par pad dans `pads.json`.
 4. **Vrais échantillons .wav** en option, avec repli sur la synthèse si les fichiers sont absents.
-5. **Mode « chanson »** : accompagnement musical simple (comptines) sur lequel taper le beat.
+5. **Chansons de l'utilisateur** : charger un fichier audio + une partition (JSON de temps/pads) en plus des comptines synthétisées.
 6. **Calibration de latence** : un mode parent pour mesurer et régler `JUDGE_OFFSET`.
 
 ## Interlocuteur
