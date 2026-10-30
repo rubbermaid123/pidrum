@@ -7,6 +7,11 @@
 # Si un element n'a aucun bouton a lui (kit qui envoie couleur + modificateur),
 # on enregistre la combinaison de boutons commune a ses frappes, par exemple
 # "yellow": [307, 311]. pidrum.py sait lire ces combinaisons.
+#
+# Enfin, les 4 boutons de facade (carre, triangle, rond, X) : sur le GH World
+# Tour PS3 ils envoient le code du pad de meme couleur et pidrum.py les
+# reconnait a l'appui long. Un bouton qui a un code propre est ecrit dans
+# "buttons". Etape facultative : ne rien presser pour la passer.
 
 import json
 import os
@@ -25,6 +30,14 @@ ROLES = [
     ("start", "le bouton START"),
     ("select", "le bouton SELECT"),
 ]
+BUTTONS = [
+    ("triangle", "le bouton TRIANGLE"),
+    ("circle", "le bouton ROND"),
+    ("cross", "le bouton X"),
+    ("square", "le bouton CARRE"),
+]
+BUTTON_HITS = 2
+BUTTON_TIMEOUT = 10.0
 HINTS = ("drum", "guitar hero", "redoctane", "harmonix", "activision")
 HITS = 3
 MERGE_WINDOW = 0.08   # trames a moins de 80 ms = un seul coup
@@ -85,14 +98,14 @@ def drain(dev):
             return
 
 
-def capture(dev, timeout=30.0):
+def capture(dev, timeout=30.0, count=HITS):
     """Retourne une liste de coups ; chaque coup = (set de touches, dict axes)."""
     from evdev import ecodes
     hits = []
     keys, axes = set(), {}
     last_frame_t = -1.0
     deadline = time.monotonic() + timeout
-    while len(hits) < HITS and time.monotonic() < deadline:
+    while len(hits) < count and time.monotonic() < deadline:
         r, _, _ = select.select([dev.fd], [], [], 0.2)
         if not r:
             continue
@@ -113,7 +126,7 @@ def capture(dev, timeout=30.0):
                         hits[-1][1].update(axes)
                     else:
                         hits.append((set(keys), dict(axes)))
-                        print("   coup %d/%d" % (len(hits), HITS))
+                        print("   coup %d/%d" % (len(hits), count))
                     last_frame_t = ts
                 keys, axes = set(), {}
     return hits
@@ -158,6 +171,31 @@ def analyze(captured):
     return keys_out, problems
 
 
+def analyze_buttons(captured, keys_out):
+    """captured : bouton -> liste de (set de touches, axes) ; keys_out : resultat d'analyze().
+
+    Retourne (buttons, notes) : buttons[bouton] = code propre (absent si le
+    bouton partage le code d'un pad ou n'a pas ete presse).
+    """
+    pad_codes = {}
+    for role, code in keys_out.items():
+        for c in (code if isinstance(code, list) else [code]):
+            pad_codes[c] = role
+    buttons, notes = {}, []
+    for button, _ in BUTTONS:
+        c = Counter(k for keys, _ in captured.get(button, []) for k in keys)
+        if not c:
+            notes.append("%s : non presse (partage avec son pad, appui long)" % button)
+            continue
+        own = [k for k in c if k not in pad_codes]
+        if own:
+            buttons[button] = sorted(own, key=lambda k: (-c[k], k))[0]
+        else:
+            shared = pad_codes[c.most_common(1)[0][0]]
+            notes.append("%s : meme code que %s (appui long)" % (button, shared))
+    return buttons, notes
+
+
 def describe(code):
     if isinstance(code, list):
         return "+".join(code_name(k) for k in code)
@@ -182,7 +220,17 @@ def main():
         print("  %-7s %s" % (role, " | ".join(
             "+".join(code_name(k) for k in sorted(keys)) for keys, _ in hits) or "-"))
 
+    print("\nBoutons de facade (facultatif) : appuie %d fois sur chacun," % BUTTON_HITS)
+    print("ou attends %d s sans rien presser pour passer.\n" % BUTTON_TIMEOUT)
+    captured_buttons = {}
+    for button, label in BUTTONS:
+        drain(dev)
+        print("-> Appuie sur %s" % label)
+        captured_buttons[button] = capture(dev, BUTTON_TIMEOUT, BUTTON_HITS)
+        time.sleep(0.3)
+
     keys_out, problems = analyze(captured)
+    buttons, button_notes = analyze_buttons(captured_buttons, keys_out)
     print("\nResultat :")
     for role, code in keys_out.items():
         print("  %-7s -> %-20s (%s)" % (role, describe(code), code))
@@ -197,6 +245,12 @@ def main():
             desc = ", ".join("%s=%s" % (abs_name(c), v) for c, v in sorted(vals.items()))
             print("  %-7s %s" % (role, desc))
 
+    print("\nBoutons de facade :")
+    for button, code in buttons.items():
+        print("  %-8s -> %-20s (%s)" % (button, describe(code), code))
+    for note in button_notes:
+        print("  " + note)
+
     if problems:
         print("\nATTENTION :")
         for p in problems:
@@ -207,6 +261,8 @@ def main():
         "keys": keys_out,
         "key_names": {r: describe(k) for r, k in keys_out.items()},
     }
+    if buttons:
+        cfg["buttons"] = buttons
     with open(OUT, "w") as f:
         json.dump(cfg, f, indent=2)
     print("\nEcrit : " + OUT)

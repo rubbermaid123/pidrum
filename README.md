@@ -5,25 +5,30 @@ Aucun texte à l'écran, tout passe par les couleurs, les sons et les animations
 
 ## Aperçu
 
-L'écran reproduit le kit vu par l'enfant : cymbales en haut, pads au milieu, pédale en bas.
+Habillage façon **Guitar Hero / Rock Band** : une autoroute de notes en perspective sur une scène de concert, avec cinq cibles de couleur sur la ligne de frappe dans l'ordre du kit (rouge, jaune, bleu, orange, vert) et la barre violette de la pédale en travers. Les gemmes descendent l'autoroute et chaque frappe allume la cible, envoie une flamme et fait sauter la foule. Les cymbales ont leur propre forme (cloche au centre), aussi bien sur les cibles que sur les gemmes.
 
 | Jeu libre | Copie-moi | Le beat |
 |---|---|---|
-| ![Jeu libre : le pad rouge et la cymbale orange viennent d'être frappés](docs/images/jeu-libre.png) | ![Copie-moi : l'anneau blanc pulsant indique le pad à frapper](docs/images/copie-moi.png) | ![Le beat : un point rempli par bonne frappe, l'anneau se referme sur le pad au temps](docs/images/le-beat.png) |
-| Chaque frappe : son, éclat et onde | Le pad attendu pulse en blanc | L'anneau se referme sur le pad pile au temps |
+| ![Jeu libre : la cible rouge et la cymbale orange viennent d'être frappées](docs/images/jeu-libre.png) | ![Copie-moi : la piste et l'anneau blanc indiquent la cible à frapper](docs/images/copie-moi.png) | ![Le beat : gemmes qui descendent l'autoroute, un point par bonne frappe en haut](docs/images/le-beat.png) |
+| Chaque frappe : son, flamme et piste allumée | La piste attendue s'allume, sa cible pulse en blanc | Les gemmes arrivent sur la cible pile au temps |
 
-| Chanson | Changement de mode | Extinction |
+| Chanson | Star power | Niveaux |
 |---|---|---|
-| ![Chanson : des notes descendent vers les pads, le pad visé pulse](docs/images/chanson.png) | ![Trois gros points : mode 3](docs/images/changement-de-mode.png) | ![Fondu de vieille télé](docs/images/extinction.png) |
-| Les notes descendent sur la musique | Appui long sur START : 1 à 4 gros points | SELECT + START : la télé « s'éteint » |
+| ![Chanson : les notes descendent l'autoroute, la piste visée s'allume](docs/images/chanson.png) | ![Star power : bords bleus, jauge pleine, foule debout](docs/images/star-power.png) | ![Escalier des 6 niveaux au centre de l'écran](docs/images/niveaux.png) |
+| Les notes descendent sur la musique | Jauge pleine : l'autoroute devient bleue | Triangle ou X maintenu : l'escalier des niveaux |
+
+| Bouton de façade | Changement de mode | Extinction |
+|---|---|---|
+| ![Jauge d'appui long avec le symbole triangle](docs/images/bouton.png) | ![Trois gros points : mode 3](docs/images/changement-de-mode.png) | ![Fondu de vieille télé](docs/images/extinction.png) |
+| Appui long : jauge et symbole du bouton | Appui long sur START : 1 à 4 gros points | SELECT + START : la télé « s'éteint » |
 
 Ces images sont produites par `test_pidrum.py` (copies dans `docs/images/`).
 
 ## Fichiers
 
-- `pidrum.py` : l'application (3 modes)
+- `pidrum.py` : l'application (4 modes, 6 niveaux chacun)
 - `sounds.py` : synthèse des sons de batterie (aucun fichier audio requis)
-- `songs.py` : comptines du mode chanson (mélodies, partitions par niveau, synthèse de la musique)
+- `songs.py` : comptines du mode chanson (mélodies, partitions par niveau, synthèse de la musique) et accompagnements du jeu libre
 - `map_pads.py` : détection des boutons du kit, génère `pads.json`
 - `pidrum.service` : démarrage automatique au boot
 - `test_pidrum.py` : tests headless (aucun kit ni écran requis), captures dans `shots/`
@@ -32,14 +37,42 @@ Ces images sont produites par `test_pidrum.py` (copies dans `docs/images/`).
 
 Appui **long** (1,5 s) sur START du kit pour passer au mode suivant. Une jauge apparaît en haut à droite pendant l'appui, puis 1 à 4 gros points indiquent le mode choisi. Un appui court est ignoré, donc l'enfant ne change pas de mode par accident.
 
-1. **Jeu libre** : chaque pad joue son son et s'illumine. Après 20 s sans frappe, un pad « appelle » doucement l'enfant.
-2. **Copie-moi** : le jeu joue un pad (ou une séquence) et l'enfant le reproduit. Le pad attendu clignote en blanc. Après 3 réussites, la séquence s'allonge (max 4). Après plusieurs erreurs, elle raccourcit. Il n'y a jamais de son d'échec.
-3. **Le beat** : métronome à 70 BPM. Un anneau blanc se referme sur le pad à frapper et le touche exactement sur le temps. Chaque bonne frappe remplit un point en haut. À 8 points, une fanfare joue et le motif suivant commence (une couleur, puis deux en alternance, etc.).
-4. **Chanson** : une comptine du domaine public joue (*Frère Jacques*, *Au clair de la lune*, *Ah ! vous dirai-je maman*, synthétisées). Des notes de couleur descendent le long de pistes vers les pads, le pad visé pulse à l'approche, et une note frappée à temps donne des étoiles. Une note manquée s'efface doucement : la chanson va toujours au bout, puis une fête lance la suivante. La densité s'adapte : une note tous les 2 temps au départ, chaque temps si l'enfant réussit 70 % des notes, toutes les notes ensuite.
+1. **Jeu libre** : chaque pad joue son son, allume sa cible et sa piste. Selon le niveau, un accompagnement en boucle (basse, accords, shaker, sans batterie) joue de plus en plus vite et dense, et l'autoroute défile à son tempo. Après 20 s sans frappe, une cible « appelle » doucement l'enfant.
+2. **Copie-moi** : des gemmes descendent l'autoroute et jouent leur son en touchant la ligne, puis l'enfant reproduit la séquence. La piste attendue s'allume et sa cible pulse en blanc. Les points en haut montrent la longueur de la séquence. Après 3 réussites, la séquence s'allonge. Après plusieurs erreurs, elle raccourcit. Il n'y a jamais de son d'échec.
+3. **Le beat** : métronome et gemmes qui arrivent sur la cible pile au temps (croches à partir du niveau intermédiaire). Chaque bonne frappe remplit un point en haut. Quand tous les points sont pleins, une fanfare joue et le motif suivant commence.
+4. **Chanson** : une comptine du domaine public joue (*Frère Jacques*, *Au clair de la lune*, *Ah ! vous dirai-je maman*, synthétisées). Les notes descendent l'autoroute, la piste visée s'allume à l'approche, et une note frappée à temps donne des étoiles. Une note manquée s'efface doucement : la chanson va toujours au bout, puis une fête lance la suivante.
+
+**Star power** : chaque bonne frappe remplit la jauge verticale à droite de l'autoroute (en jeu libre, chaque frappe compte un peu). Pleine, elle déclenche 8 s de star power : bords de l'autoroute bleus, projecteurs qui clignotent, foule debout et applaudissements. La jauge ne descend jamais sur une erreur.
+
+## Boutons de façade et niveaux
+
+Les 4 boutons du boîtier servent au parent. Il faut les **maintenir 0,8 s** : une jauge de la couleur du bouton apparaît en haut à droite avec son symbole, puis l'action part une seule fois par appui.
+
+| Bouton | Action |
+|---|---|
+| △ triangle | niveau plus difficile pour le jeu en cours |
+| ✕ croix | niveau plus facile |
+| ○ rond | mode suivant |
+| □ carré | mode précédent |
+
+Sur le GH World Tour PS3, chaque bouton envoie le **même code que le pad de sa couleur** (rond = rouge, carré = bleu, X = vert, triangle = jaune). Un coup de baguette ne dure que quelques millisecondes : seul un appui maintenu compte comme bouton. L'appui joue quand même le son du pad, une fois, au début. Le triangle fonctionne même si la cymbale jaune est désactivée (connecteur cassé). Si ton kit a des codes propres pour ces boutons, `map_pads.py` les détecte et les écrit dans `pads.json` (`"buttons"`).
+
+Chaque jeu a **6 niveaux**, réglés séparément et mémorisés dans `progress.json` (non versionné) : apprenti, novice, débutant, intermédiaire, avancé, expert. L'escalier en haut à gauche montre le niveau joué. Après un changement, un grand escalier s'affiche au centre (vert, vert clair, jaune, orange, rouge, violet, comme les difficultés de Guitar Hero).
+
+| Niveau | Jeu libre | Copie-moi | Le beat | Chanson |
+|---|---|---|---|---|
+| apprenti | silence | 1 pad, peaux seulement, indice tout de suite | 60 BPM, une couleur | une note par mesure, peaux seulement |
+| novice | pulsation 72 BPM | 1 à 2 pads | 70 BPM, cymbales et paires | tous les 2 temps, peaux |
+| débutant | basse 80 BPM | 2 à 3 pads | 76 BPM, motifs de 4 | tous les 2 temps, 5 pads |
+| intermédiaire | pop 90 BPM | 2 à 4 pads | 84 BPM, croches | chaque temps |
+| avancé | rock 100 BPM | 3 à 5 pads, plus rapide | 96 BPM, croches serrées | toutes les notes |
+| expert | funk 110 BPM | 4 à 6 pads | 108 BPM, 16 frappes par motif | toutes les notes + accords de cymbale |
+
+Le niveau choisi est un plafond, pas une contrainte : si l'enfant peine (erreurs dans *Copie-moi*, gemmes ratées alors qu'il joue dans *Le beat*, moins de 30 % des notes d'une chanson), le jeu redescend tout seul d'un niveau. Il remonte ensuite après des réussites, sans dépasser le niveau choisi. Un contour blanc sur l'escalier marque le niveau choisi tant qu'il n'est pas rejoint. Les tolérances de temps se resserrent avec le niveau (0,30 à 0,15 s dans *Le beat*, 0,35 à 0,18 s en chanson).
 
 **Éteindre le Pi proprement** : maintenir **SELECT + START** ensemble 3 s. La jauge en haut à droite devient bleue, puis une petite mélodie descendante joue et l'écran s'éteint comme une vieille télé. Attendre que la LED verte du Pi ne clignote plus avant de couper le courant. Cela évite de corrompre la carte SD. Nécessite la règle sudoers (voir « Démarrage automatique »). Sans elle, le jeu reprend simplement et le journal l'indique.
 
-Le clavier fonctionne aussi pour les tests : `1` à `5` pour les pads, espace pour la pédale, Entrée pour START, Tab pour SELECT et Échap pour quitter.
+Le clavier fonctionne aussi pour les tests : `1` à `5` pour les pads, espace pour la pédale, Entrée pour START, Tab pour SELECT, les flèches pour les boutons de façade (haut △, bas ✕, droite ○, gauche □, à maintenir) et Échap pour quitter.
 
 ## Installation sur le Pi
 
@@ -90,7 +123,7 @@ Brancher le dongle, allumer le kit, puis :
 cd ~/pidrum && python3 map_pads.py
 ```
 
-Le script demande de frapper chaque élément 3 fois, puis d'appuyer sur START et SELECT. Il affiche les touches vues pour chaque frappe, puis écrit `pads.json`.
+Le script demande de frapper chaque élément 3 fois, puis d'appuyer sur START et SELECT, puis (facultatif) deux fois sur chaque bouton de façade. Pour passer cette dernière étape, attendre 10 s sans rien presser par bouton. Il affiche les touches vues pour chaque frappe, puis écrit `pads.json`. Attention, il réécrit le fichier : remettre ensuite `disabled` et `velocity` s'ils y étaient.
 
 - Si un élément n'a pas de bouton à lui (kit qui envoie couleur + modificateur), le script enregistre la **combinaison** de boutons, par exemple `"yellow": [304, 401]`. `pidrum.py` sait la lire. C'est signalé sous « ATTENTION » : vérifier en jeu libre que chaque élément joue le bon son.
 - S'il reste un conflit (même combinaison pour deux éléments), envoie-moi la sortie de `sudo evtest` pendant que tu frappes les pads.
@@ -186,7 +219,9 @@ sudo systemctl disable --now getty@tty1
 
 ## Réglages
 
-Tout est en haut de `pidrum.py` : `BPM`, `BEAT_WINDOW` (tolérance), `BEAT_GOAL`, `KICK_IN_GAMES` (inclure la pédale dans les jeux, désactivé par défaut pour un enfant de 3 ans), `SIMON_MAX_LEN`, `HOLD_TO_SWITCH`, ainsi que les délais et seuils de *Copie-moi* (`COPY_*`).
+Tout est en haut de `pidrum.py` : les tables de niveaux `FREE_LEVELS`, `COPY_LEVELS`, `BEAT_LEVELS` (tempo, tolérance, motifs) et `SONG_LEVELS` (densité, tolérance, vitesse des notes), `BUTTON_HOLD` et `BUTTON_ACTIONS` (boutons de façade), `KICK_IN_GAMES` (inclure la pédale dans les jeux, désactivé par défaut pour un enfant de 3 ans), `HOLD_TO_SWITCH`, l'énergie (`ENERGY_*`, `STAR_TIME`), la géométrie de l'autoroute (`HIGHWAY_*`, `STRIKE_Y`) et les délais et seuils de *Copie-moi* (`COPY_*`).
+
+Pour remettre tous les niveaux à apprenti : `rm ~/pidrum/progress.json` puis redémarrer le service.
 
 ## Pistes pour la suite
 

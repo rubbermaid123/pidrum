@@ -110,27 +110,51 @@ class TestSongs(unittest.TestCase):
             beats = songs.COUNT_IN + songs.length_beats(song) + songs.TAIL
             self.assertAlmostEqual(len(x) / 48000, beats * period, delta=0.2)
 
-    def test_chart_levels_get_denser(self):
+    def test_chart_densities_get_denser(self):
         for song in songs.SONGS:
-            counts = [len(songs.chart(song, lv, self.PADS4)) for lv in range(3)]
+            counts = [len(songs.chart(song, d, self.PADS4)) for d in range(5)]
             self.assertGreater(counts[0], 0, song["id"])
-            self.assertLessEqual(counts[0], counts[1])
-            self.assertLessEqual(counts[1], counts[2])
-            # niveau 0 : au moins 2 temps entre deux notes
+            for a, b in zip(counts, counts[1:]):
+                self.assertLessEqual(a, b, song["id"])
+            # densite 0 : une note par mesure au plus
             beats = [b for b, _ in songs.chart(song, 0, self.PADS4)]
-            self.assertTrue(all(b2 - b1 >= 2 for b1, b2 in zip(beats, beats[1:])))
+            self.assertTrue(all(b2 - b1 >= 4 for b1, b2 in zip(beats, beats[1:])))
+
+    def test_expert_chart_has_cymbal_chords(self):
+        for song in songs.SONGS:
+            notes = songs.chart(song, 4, self.PADS4)
+            self.assertEqual(notes, sorted(notes, key=lambda n: n[0]))
+            by_beat = {}
+            for b, pad in notes:
+                by_beat.setdefault(b, []).append(pad)
+            chords = [p for p in by_beat.values() if len(p) > 1]
+            self.assertTrue(chords, song["id"])
+            self.assertTrue(all(len(set(p)) == len(p) and "orange" in p for p in chords))
 
     def test_chart_only_uses_given_pads(self):
         for song in songs.SONGS:
-            for lv in range(3):
-                used = {p for _, p in songs.chart(song, lv, ["red", "blue"])}
+            for d in range(5):
+                used = {p for _, p in songs.chart(song, d, ["red", "blue"])}
                 self.assertTrue(used <= {"red", "blue"})
             self.assertEqual(songs.chart(song, 0, []), [])
 
     def test_count_in_longer_than_lead(self):
         # Une note doit pouvoir faire tout son trajet apres le depart de la musique
+        lead = max(c["lead"] for c in pidrum.SONG_LEVELS)
         for song in songs.SONGS:
-            self.assertGreaterEqual(songs.COUNT_IN * 60.0 / song["bpm"], pidrum.SONG_LEAD)
+            self.assertGreaterEqual(songs.COUNT_IN * 60.0 / song["bpm"], lead)
+
+    def test_grooves_loop_exactly_and_bounded(self):
+        s = sounds.Synth(48000)
+        for gid, g in songs.GROOVES.items():
+            x = songs.render_groove(g, s)
+            self.assertTrue(np.all(np.isfinite(x)), gid)
+            self.assertLessEqual(float(np.max(np.abs(x))), 1.0, gid)
+            period = 60.0 / g["bpm"]
+            self.assertAlmostEqual(len(x) / 48000, songs.groove_beats(g) * period, delta=0.001)
+        # Chaque niveau du jeu libre a son accompagnement (ou le silence)
+        for groove in pidrum.FREE_LEVELS:
+            self.assertTrue(groove is None or groove in songs.GROOVES)
 
 
 class TestKeyDecoder(unittest.TestCase):
@@ -468,6 +492,31 @@ class TestMapAnalyze(unittest.TestCase):
         self.assertTrue(any(p.startswith("select") for p in problems))
 
 
+class TestMapButtons(unittest.TestCase):
+    KEYS = {"red": 306, "blue": 304, "green": 305, "yellow": 307, "start": 312}
+
+    def test_shared_codes_not_written(self):
+        cap = {"triangle": [({307}, {})], "circle": [({306}, {})], "cross": [], "square": [({304}, {})]}
+        buttons, notes = map_pads.analyze_buttons(cap, self.KEYS)
+        self.assertEqual(buttons, {})
+        self.assertEqual(len(notes), 4)
+
+    def test_own_code_written_and_used(self):
+        cap = {"triangle": [({544}, {}), ({544}, {})], "circle": [({306}, {})]}
+        buttons, _ = map_pads.analyze_buttons(cap, self.KEYS)
+        self.assertEqual(buttons, {"triangle": 544})
+        cfg = {"keys": self.KEYS, "buttons": buttons}
+        self.assertEqual(pidrum.kit_keys(cfg)["triangle"], 544)
+        shared = pidrum.shared_buttons(cfg)
+        self.assertNotIn("yellow", shared)               # triangle a son propre code
+        self.assertEqual(shared["red"], "circle")
+
+    def test_button_with_pad_code_stays_shared(self):
+        cfg = {"keys": self.KEYS, "buttons": {"circle": 306}}
+        self.assertNotIn("circle", pidrum.kit_keys(cfg))
+        self.assertEqual(pidrum.shared_buttons(cfg)["red"], "circle")
+
+
 class TestApp(unittest.TestCase):
     def setUp(self):
         self.h = Harness()
@@ -552,6 +601,7 @@ class TestApp(unittest.TestCase):
 
     def test_song_all_notes_hit_levels_up_and_next_song(self):
         m = self.start_song_mode()
+        m.home = 1                     # le parent a choisi un niveau au-dessus
         first = m.song["id"]
         self.assertIsNotNone(m.channel)
         self.play_notes(m, offset=0.1)
@@ -566,12 +616,31 @@ class TestApp(unittest.TestCase):
         m = self.start_song_mode()
         other = {"red": "blue", "blue": "red", "green": "red", "orange": "red"}
         self.play_notes(m, pad_of=lambda n: other[n["pad"]], upto=3)
-        self.play_notes(m, offset=pidrum.SONG_WINDOW + 0.05, start=3, upto=6)
+        self.play_notes(m, offset=m.window + 0.05, start=3, upto=6)
         self.assertEqual(m.hits, 0)
         self.h.run(m.end_t - self.h.t + 0.1)
         self.assertEqual(m.state, "pause")       # toujours au bout
         self.assertEqual(m.level, 0)             # ne descend pas sous 0
         self.assertTrue(all(n["state"] == "miss" for n in m.notes))
+
+    def test_song_never_climbs_above_chosen_level(self):
+        m = self.start_song_mode()
+        self.play_notes(m, offset=0.05)
+        self.h.run(m.end_t - self.h.t + 0.1)
+        self.assertEqual(m.level, 0)             # home = 0 : reste au niveau choisi
+
+    def test_song_levels_change_chart(self):
+        self.h.goto(pidrum.Song)
+        m = self.h.app.mode
+        counts = []
+        for lv in range(len(pidrum.LEVELS)):
+            m.home = m.level = lv
+            m.start_song(self.h.t)
+            counts.append(len(m.chart))
+            if pidrum.SONG_LEVELS[lv]["pads"] == "drums":
+                self.assertTrue({p for _, p in m.chart} <= set(pidrum.DRUM_PADS))
+        self.assertEqual(counts, sorted(counts))
+        self.assertLess(counts[0], counts[-1])
 
     def test_song_leaving_mode_stops_music(self):
         m = self.start_song_mode()
@@ -599,8 +668,14 @@ class TestApp(unittest.TestCase):
             app.mode.new_round(self.h.t)
             self.assertNotIn("yellow", app.mode.seq)
         self.h.goto(pidrum.Beat)
-        for p in app.mode.patterns:
-            self.assertNotIn("yellow", p)
+        for lv in range(len(pidrum.LEVELS)):
+            app.mode.level = lv
+            app.mode.setup(self.h.t)
+            for p in app.mode.patterns:
+                self.assertNotIn("yellow", p)
+                self.assertNotIn("kick", p)
+        app.mode.level = 0
+        app.mode.setup(self.h.t)
         self.assertIn(["red"], app.mode.patterns)
         played = []
         app.play = lambda name, volume=1.0: played.append(name)
@@ -625,10 +700,24 @@ class TestApp(unittest.TestCase):
         self.h.run(pidrum.HOLD_TO_SWITCH + 0.1)
         self.assertIsInstance(self.h.app.mode, pidrum.CopyMe)
 
+    def copy_mode(self, level):
+        self.h.goto(pidrum.CopyMe)
+        m = self.h.app.mode
+        m.home = m.level = level
+        m.setup(self.h.t)
+        return m
+
+    def copy_win(self, m):
+        while m.state != "wait":
+            self.h.run(0.1)
+        for pad in list(m.seq):
+            self.h.hit(pad)
+            self.h.run(0.1)
+
     def test_copyme_wrong_hit_does_not_advance(self):
         self.h.goto(pidrum.CopyMe)
         m = self.h.app.mode
-        self.h.run(m.STEP * len(m.seq) + 1.5)
+        self.h.run(pidrum.COPY_START_DELAY + pidrum.COPY_LEAD + m.step * len(m.seq) + 0.5)
         self.assertEqual(m.state, "wait")
         wrong = next(p for p in pidrum.GAME_PADS if p != m.seq[m.idx])
         self.h.hit(wrong)
@@ -636,16 +725,47 @@ class TestApp(unittest.TestCase):
         self.assertEqual(m.state, "wait")
 
     def test_copyme_three_wins_lengthen(self):
-        self.h.goto(pidrum.CopyMe)
-        m = self.h.app.mode
+        m = self.copy_mode(1)
         self.assertEqual(m.length, 1)
         for _ in range(3):
-            while m.state != "wait":
-                self.h.run(0.1)
-            for pad in list(m.seq):
-                self.h.hit(pad)
-                self.h.run(0.1)
+            self.copy_win(m)
         self.assertEqual(m.length, 2)
+
+    def test_copyme_apprenti_drums_only_and_climbs_to_chosen_level(self):
+        m = self.copy_mode(0)
+        m.home = 1
+        for _ in range(30):
+            m.new_round(self.h.t)
+            self.assertTrue(set(m.seq) <= set(pidrum.DRUM_PADS))
+        for _ in range(pidrum.COPY_WINS_TO_GROW):
+            self.copy_win(m)
+        self.assertEqual(m.level, 1)
+        for _ in range(pidrum.COPY_WINS_TO_GROW * 2):
+            self.copy_win(m)
+        self.assertEqual(m.level, 1)             # jamais au-dessus du niveau choisi
+
+    def copy_fail(self, m):
+        while m.state != "wait":
+            self.h.run(0.1)
+        wrong = next(p for p in pidrum.GAME_PADS if p != m.seq[m.idx])
+        for _ in range(pidrum.COPY_ERRORS_TO_SHRINK):
+            self.h.hit(wrong)
+            self.h.run(0.1)
+
+    def test_copyme_errors_shrink_then_drop_level(self):
+        m = self.copy_mode(3)
+        m.length = 3
+        m.new_round(self.h.t)
+        self.copy_fail(m)
+        self.assertEqual((m.level, m.length), (3, 2))   # raccourcit d'abord
+        self.copy_fail(m)
+        self.assertEqual(m.level, 2)                     # puis redescend d'un niveau
+        self.assertEqual(m.home, 3)
+
+    def test_copyme_expert_sequences(self):
+        m = self.copy_mode(5)
+        self.assertEqual(len(m.seq), pidrum.COPY_LEVELS[5]["min"])
+        self.assertLess(m.step, pidrum.COPY_LEVELS[0]["step"])
 
     def test_copyme_never_uses_kick_by_default(self):
         self.h.goto(pidrum.CopyMe)
@@ -660,14 +780,57 @@ class TestApp(unittest.TestCase):
         self.h.t = target_t
         self.h.hit(m.target(n))
 
-    def test_beat_eight_hits_level_up(self):
+    def test_beat_goal_hits_next_pattern(self):
         self.h.goto(pidrum.Beat)
         m = self.h.app.mode
-        self.assertEqual(m.level, 0)
-        offsets = [0.0, 0.1, -0.1, 0.2, -0.2, 0.05, -0.05, 0.0]
-        for i, off in enumerate(offsets):
-            self._beat_hit_at(m, i, off)
+        self.assertEqual((m.level, m.pattern_idx), (0, 0))
+        offsets = [0.0, 0.1, -0.1, 0.2, -0.2, 0.05, -0.05, 0.25]
+        for i in range(m.goal):
+            self._beat_hit_at(m, i, offsets[i % len(offsets)])
+        self.assertEqual(m.pattern_idx, 1)
+        self.assertEqual(m.good, 0)
+
+    def test_beat_all_patterns_climb_to_chosen_level(self):
+        self.h.goto(pidrum.Beat)
+        m = self.h.app.mode
+        m.home = 1
+        for _ in range(len(m.patterns)):
+            for i in range(m.goal):
+                self._beat_hit_at(m, i, 0.0)
         self.assertEqual(m.level, 1)
+        self.assertEqual(m.period, 60.0 / pidrum.BEAT_LEVELS[1]["bpm"])
+
+    def test_beat_levels_tempo_and_eighths(self):
+        self.h.goto(pidrum.Beat)
+        m = self.h.app.mode
+        bpms = []
+        for lv in range(len(pidrum.LEVELS)):
+            m.level = lv
+            m.setup(self.h.t)
+            bpms.append(60.0 / m.period)
+            self.assertLessEqual(m.window, m.step / 2 + 1e-9)
+        self.assertEqual(bpms, sorted(bpms))
+        self.assertEqual(m.sub, 2)
+        # Croches : un pas sur deux tombe entre deux temps
+        n = 1
+        self._beat_hit_at(m, n, 0.0) if m.target(n) else None
+
+    def test_beat_misses_drop_level_only_when_child_plays(self):
+        self.h.goto(pidrum.Beat)
+        m = self.h.app.mode
+        m.home = m.level = 2
+        m.setup(self.h.t)
+        # Enfant absent : aucune redescente
+        self.h.run(pidrum.BEAT_MISSES_TO_DROP * m.step + 2 * m.period + 1.0)
+        self.assertEqual(m.level, 2)
+        # Enfant qui tape a cote a chaque temps : redescend d'un niveau
+        for _ in range(pidrum.BEAT_MISSES_TO_DROP + 4):
+            self.h.run(m.step)
+            self.h.hit("orange" if "orange" not in m.patterns[m.pattern_idx] else "green")
+            if m.level < 2:
+                break
+        self.assertEqual(m.level, 1)
+        self.assertEqual(m.home, 2)
 
     def test_beat_off_window_not_counted(self):
         self.h.goto(pidrum.Beat)
@@ -681,6 +844,127 @@ class TestApp(unittest.TestCase):
         wrong = next(p for p in pidrum.GAME_PADS if p != m.target(4))
         self.h.hit(wrong)
         self.assertEqual(m.good, 0)
+
+    # --- boutons de facade et niveaux ---
+
+    def test_held_button_pads_change_level_and_mode(self):
+        app = self.h.app
+        self.hold("yellow", sec=pidrum.BUTTON_HOLD + 0.1)        # triangle
+        self.assertEqual((app.mode.home, app.mode.level), (1, 1))
+        self.assertIsInstance(app.mode, pidrum.FreePlay)
+        self.hold("green", sec=pidrum.BUTTON_HOLD + 0.1)         # X
+        self.assertEqual(app.mode.home, 0)
+        self.hold("green", sec=pidrum.BUTTON_HOLD + 0.1)         # deja au plus facile
+        self.assertEqual(app.mode.home, 0)
+        self.hold("red", sec=pidrum.BUTTON_HOLD + 0.1)           # rond
+        self.assertIsInstance(app.mode, pidrum.CopyMe)
+        self.hold("blue", sec=pidrum.BUTTON_HOLD + 0.1)          # carre
+        self.assertIsInstance(app.mode, pidrum.FreePlay)
+        self.hold("blue", sec=pidrum.BUTTON_HOLD + 0.1)
+        self.assertIsInstance(app.mode, pidrum.Song)
+
+    def test_hits_and_short_presses_are_not_buttons(self):
+        app = self.h.app
+        for _ in range(20):
+            for pad in pidrum.GAME_PADS:
+                self.h.hit(pad)
+            self.h.run(0.1)
+        self.hold("yellow", sec=pidrum.BUTTON_HOLD * 0.6)
+        self.h.run(1.0)
+        self.assertIsInstance(app.mode, pidrum.FreePlay)
+        self.assertEqual(app.mode.home, 0)
+
+    def test_one_action_per_press_and_hit_still_counts(self):
+        app = self.h.app
+        calls = []
+        app.mode.on_hit = lambda a, pad, t: calls.append(pad)
+        self.hold("yellow", sec=pidrum.BUTTON_HOLD * 3)
+        self.assertEqual(app.mode.home, 1)       # une seule marche malgre 3x la duree
+        self.assertEqual(calls, ["yellow"])      # le coup de depart reste une frappe
+
+    def test_bounce_during_hold_keeps_hold(self):
+        app = self.h.app
+        t = self.h.t
+        app.handle("down", "yellow", t)
+        app.handle("up", "yellow", t + 0.002)
+        app.handle("down", "yellow", t + 0.004)  # rebond : ignore pour le son
+        self.h.run(pidrum.BUTTON_HOLD + 0.1)
+        app.handle("up", "yellow", self.h.t)
+        self.assertEqual(app.mode.home, 1)
+
+    def test_direct_buttons_and_disabled_pad(self):
+        app = self.h.app
+        played = []
+        app.play = lambda name, volume=1.0, loops=0: played.append(name)
+        self.hold("triangle", sec=pidrum.BUTTON_HOLD + 0.1)
+        self.assertEqual(app.mode.home, 1)
+        self.assertIn("level_up", played)
+        # Cymbale jaune desactivee : le bouton triangle (meme code) marche encore, sans son
+        app.disabled = {"yellow"}
+        played.clear()
+        self.hold("yellow", sec=pidrum.BUTTON_HOLD + 0.1)
+        self.assertEqual(app.mode.home, 2)
+        self.assertNotIn("hihat", played)
+
+    def test_select_held_blocks_buttons(self):
+        self.hold("select", "yellow", sec=pidrum.BUTTON_HOLD + 0.1)
+        self.assertEqual(self.h.app.mode.home, 0)
+
+    def test_level_tables_complete(self):
+        for table in (pidrum.FREE_LEVELS, pidrum.COPY_LEVELS, pidrum.BEAT_LEVELS, pidrum.SONG_LEVELS):
+            self.assertEqual(len(table), len(pidrum.LEVELS))
+        self.assertEqual(len(pidrum.LEVEL_COLORS), len(pidrum.LEVELS))
+        for c in pidrum.BEAT_LEVELS:
+            for p in c["patterns"]:
+                self.assertTrue(set(p) <= set(pidrum.PATTERN_PADS) | {"."}, p)
+
+    def test_free_play_groove_loops_and_stops(self):
+        app = self.h.app
+        started, stopped = [], []
+
+        class FakeChannel:
+            def stop(self):
+                stopped.append(True)
+        app.play = lambda name, volume=1.0, loops=0: started.append((name, loops)) or FakeChannel()
+        self.hold("yellow", sec=pidrum.BUTTON_HOLD + 0.1)
+        self.assertIn(("groove_" + pidrum.FREE_LEVELS[1], -1), started)
+        self.hold("red", sec=pidrum.BUTTON_HOLD + 0.1)
+        self.assertEqual(stopped, [True])
+
+    def test_levels_persist(self):
+        import tempfile
+        path = os.path.join(tempfile.mkdtemp(), "progress.json")
+        pygame.quit()
+        app = pidrum.App(window=True, use_kit=False, progress_file=path)
+        app.switch_mode(app.last_t, 2)                            # Le beat
+        app.change_level(1, app.last_t)
+        app.change_level(1, app.last_t)
+        pygame.quit()
+        app = pidrum.App(window=True, use_kit=False, progress_file=path)
+        self.assertEqual({m.key: m.home for m in app.modes}, {"free": 0, "copy": 0, "beat": 2, "song": 0})
+        with open(path, "w") as f:
+            f.write("{pas du json")
+        pygame.quit()
+        app = pidrum.App(window=True, use_kit=False, progress_file=path)   # ne plante pas
+        self.assertEqual(app.modes[2].home, 0)
+
+    def test_energy_only_goes_up_and_triggers_star_power(self):
+        app = self.h.app
+        self.h.goto(pidrum.CopyMe)
+        m = app.mode
+        hits = 0
+        while not app.star_power(self.h.t):
+            before = app.energy
+            while m.state != "wait":
+                self.h.run(0.1)
+            wrong = next(p for p in pidrum.GAME_PADS if p != m.seq[m.idx])
+            self.h.hit(wrong)
+            self.assertGreaterEqual(app.energy, before)  # une erreur ne retire rien
+            self.copy_win(m)
+            hits += 1
+            self.assertLess(hits, 40)
+        self.h.run(pidrum.STAR_TIME + 0.1)
+        self.assertFalse(app.star_power(self.h.t))
 
     def test_beat_double_hit_same_beat_counts_once(self):
         self.h.goto(pidrum.Beat)
@@ -719,13 +1003,26 @@ class TestShots(unittest.TestCase):
         h.run(0.3)
         h.shot("2_copy_banner")
         m = h.app.mode
-        h.run(m.STEP * len(m.seq) + pidrum.SIMON_HINT_DELAY + 0.5)
+        m.home = m.level = 3
+        m.setup(h.t)
+        h.run(pidrum.COPY_LEAD + m.step * 0.5)
+        h.shot("2_copy_show")
+        h.run(m.step * len(m.seq) + m.hint + 0.5)
         h.shot("2_copy_wait_target")
         h.hit(m.seq[0])
         h.run(0.25)
         h.shot("2_copy_celebrate")
         h.goto(pidrum.Beat)
         b = h.app.mode
+        h.app.handle("down", "yellow", h.t)                       # triangle maintenu
+        h.run(pidrum.BUTTON_HOLD * 0.7)
+        h.shot("3_beat_button_gauge")
+        h.run(pidrum.BUTTON_HOLD * 0.3 + 0.05)
+        h.app.handle("up", "yellow", h.t)
+        h.run(0.4)
+        h.shot("3_beat_level_banner")
+        b.home = b.level = 4
+        b.setup(h.t)
         h.run(b.t0 + 2.6 * b.period - h.t)
         h.shot("3_beat_approach")
         h.run(b.t0 + 3 * b.period - h.t)
@@ -737,12 +1034,16 @@ class TestShots(unittest.TestCase):
         while s.state != "play":
             h.run(0.1)
         h.run(s.notes[2]["t"] - h.t - 0.6)
-        h.hit(s.notes[1]["pad"]) if abs(s.notes[1]["t"] - h.t) < pidrum.SONG_WINDOW else None
+        h.hit(s.notes[1]["pad"]) if abs(s.notes[1]["t"] - h.t) < s.window else None
         h.shot("5_song_track")
         h.t = s.notes[2]["t"]
         h.hit(s.notes[2]["pad"])
         h.run(0.1)
         h.shot("5_song_hit")
+        for _ in range(int(1 / pidrum.ENERGY_HIT) + 1):
+            h.app.gain_energy(pidrum.ENERGY_HIT, h.t)
+        h.run(0.5)
+        h.shot("5_song_star_power")
         h.goto(pidrum.FreePlay)
         old = pidrum.SHUTDOWN_CMD
         pidrum.SHUTDOWN_CMD = [sys.executable, "-c", "pass"]
